@@ -1,0 +1,49 @@
+# Cloudflare Worker for survo.tech: static site + click/opt-out tracking + dashboard + job API.
+name = "ibls-survo"
+main = "src/index.ts"
+compatibility_date = "2025-09-01"
+workers_dev = true
+
+# Custom domains (Cloudflare creates the DNS records + certificates on deploy).
+# survo.tech must be an active zone in the same Cloudflare account.
+routes = [
+  { pattern = "survo.tech", custom_domain = true },
+  { pattern = "www.survo.tech", custom_domain = true },
+]
+
+# Static site in site/. Matching files are served directly; the paths below always
+# hit the Worker first so they can never be shadowed by a static file.
+[assets]
+directory = "./site"
+binding = "ASSETS"
+not_found_handling = "none"
+run_worker_first = ["/s/*", "/optout/*", "/dashboard", "/dashboard/*", "/api/*"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "ibls"
+# Replace with the id printed by `npx wrangler d1 create ibls` (see README).
+database_id = "00000000-0000-0000-0000-000000000000"
+migrations_dir = "migrations"
+
+# Dashboard HTML is bundled into the Worker as text (it is never a public static file).
+[[rules]]
+type = "Text"
+globs = ["**/*.html"]
+fallthrough = true
+
+# Housekeeping: stop rules, stale reservations, daily rollups.
+[triggers]
+crons = ["*/15 * * * *"]
+
+[vars]
+SITE_ORIGIN = "https://survo.tech"
+KOBO_FORM_URL = "https://ee.kobotoolbox.org/jbh8Urj6"
+# Cloudflare Access (Zero Trust) for /dashboard. Fill in after creating the Access app.
+# ACCESS_TEAM_DOMAIN example: "morsel.cloudflareaccess.com"; ACCESS_AUD = the app's AUD tag.
+ACCESS_TEAM_DOMAIN = ""
+ACCESS_AUD = ""
+
+# Secrets (set with `npx wrangler secret put NAME`, never committed):
+#   API_TOKEN        bearer token shared with the GitHub Actions jobs
+#   DASHBOARD_USERS  "user:sha256hex,user2:sha256hex" fallback Basic-auth users

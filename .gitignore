@@ -1,0 +1,11 @@
+node_modules/
+.wrangler/
+.dev.vars
+.env
+*.env
+data/
+build/
+__pycache__/
+*.pyc
+.pytest_cache/
+/out/

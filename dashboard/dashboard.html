@@ -1,0 +1,378 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="robots" content="noindex,nofollow" />
+<title>IBLS · Outreach dashboard</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<style>
+  :root { color-scheme: light dark; --bg:#f6f7f9; --card:#fff; --ink:#1d1d1f; --mute:#6b7280; --line:#e5e7eb; --accent:#1f3a5f; --ok:#15803d; --warn:#b45309; --bad:#b91c1c; --r:12px; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#111317; --card:#1a1d23; --ink:#f3f4f6; --mute:#9ca3af; --line:#2b2f37; --accent:#8fb3e8; } }
+  * { box-sizing: border-box; }
+  body { margin:0; font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; background:var(--bg); color:var(--ink); }
+  header { position:sticky; top:0; z-index:5; background:var(--card); border-bottom:1px solid var(--line); padding:10px 16px; display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
+  header h1 { font-size:16px; margin:0 8px 0 0; }
+  main { max-width:1280px; margin:0 auto; padding:16px; display:grid; gap:16px; }
+  .pill { display:inline-block; padding:2px 10px; border-radius:999px; font-weight:600; font-size:12px; }
+  .pill.ok { background:#dcfce7; color:#14532d; } .pill.warn { background:#fef3c7; color:#78350f; } .pill.bad { background:#fee2e2; color:#7f1d1d; }
+  .spacer { flex:1; }
+  button, .btn { font:inherit; border:1px solid var(--line); background:var(--card); color:var(--ink); padding:6px 12px; border-radius:8px; cursor:pointer; text-decoration:none; }
+  button.primary { background:var(--accent); color:#fff; border-color:var(--accent); }
+  button.danger { background:var(--bad); color:#fff; border-color:var(--bad); }
+  button:disabled { opacity:.5; cursor:default; }
+  .banner { padding:10px 14px; border-radius:var(--r); font-weight:500; }
+  .banner.bad { background:#fee2e2; color:#7f1d1d; } .banner.warn { background:#fef3c7; color:#78350f; }
+  .grid { display:grid; gap:12px; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
+  .kpi { background:var(--card); border:1px solid var(--line); border-radius:var(--r); padding:12px; }
+  .kpi .v { font-size:22px; font-weight:650; } .kpi .l { color:var(--mute); font-size:12px; } .kpi .s { color:var(--mute); font-size:12px; }
+  .row2 { display:grid; gap:16px; grid-template-columns: 2fr 1fr; } @media (max-width:900px){ .row2 { grid-template-columns:1fr; } }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:var(--r); padding:14px; min-width:0; }
+  .card h2 { font-size:14px; margin:0 0 10px; text-transform:uppercase; letter-spacing:.04em; color:var(--mute); }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  th, td { text-align:left; padding:6px 8px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { color:var(--mute); font-weight:600; position:sticky; top:0; background:var(--card); }
+  td.n, th.n { text-align:right; font-variant-numeric:tabular-nums; }
+  .scroll { max-height:380px; overflow:auto; }
+  .muted { color:var(--mute); } .small { font-size:12px; }
+  .tabs button { margin-right:4px; } .tabs button.on { background:var(--accent); color:#fff; border-color:var(--accent); }
+  input[type=text], input[type=search], textarea, select { font:inherit; padding:6px 8px; border:1px solid var(--line); border-radius:8px; background:var(--bg); color:var(--ink); width:100%; }
+  .form { display:grid; grid-template-columns: repeat(auto-fill, minmax(260px,1fr)); gap:10px 16px; }
+  .form label { display:grid; gap:4px; font-size:12px; color:var(--mute); }
+  .bar { height:10px; background:var(--line); border-radius:6px; overflow:hidden; } .bar > i { display:block; height:100%; background:var(--accent); }
+  .tl li { margin:4px 0; } .tag { font-size:11px; padding:1px 6px; border-radius:6px; background:var(--line); }
+  dialog { border:1px solid var(--line); border-radius:var(--r); background:var(--card); color:var(--ink); max-width:760px; width:95vw; }
+  dialog::backdrop { background:#0006; }
+  .ok { color:var(--ok); } .bad { color:var(--bad); } .warn { color:var(--warn); }
+  canvas { max-height:280px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>India Business Leaders Survey · Outreach</h1>
+  <span id="statusPill" class="pill warn">loading…</span>
+  <span class="spacer"></span>
+  <span class="muted small" id="who"></span>
+  <button id="btnPause" class="danger" hidden>Pause sending</button>
+  <button id="btnResume" class="primary" hidden>Resume sending</button>
+  <a class="btn" href="/dashboard/api/export.csv">Export CSV</a>
+  <button id="btnRefresh">Refresh</button>
+</header>
+<main>
+  <div id="banners"></div>
+
+  <section class="grid" id="kpis"></section>
+
+  <section class="row2">
+    <div class="card"><h2>Daily sends</h2><canvas id="chartDaily"></canvas></div>
+    <div class="card"><h2>Funnel</h2><canvas id="chartFunnel"></canvas></div>
+  </section>
+
+  <section class="row2">
+    <div class="card"><h2>Schedule &amp; progress</h2><div id="schedule"></div></div>
+    <div class="card"><h2>System health</h2><div id="health"></div></div>
+  </section>
+
+  <section class="card">
+    <h2>Replies needing attention</h2>
+    <div class="tabs" id="replyTabs"><button data-f="open" class="on">Open</button><button data-f="queries">All queries</button><button data-f="all">Everything</button></div>
+    <div class="scroll" id="replies"></div>
+  </section>
+
+  <section class="row2">
+    <div class="card">
+      <h2>Response by stratum</h2>
+      <div class="tabs" id="strataTabs"><button data-d="region" class="on">Region</button><button data-d="size_band">Size band</button><button data-d="nature">Nature</button><button data-d="email_tier">Email tier</button></div>
+      <div id="strata"></div>
+    </div>
+    <div class="card">
+      <h2>Contact search</h2>
+      <input type="search" id="q" placeholder="email, company or RID" />
+      <div class="scroll" id="results"></div>
+    </div>
+  </section>
+
+  <section class="card"><h2>Per batch (send day)</h2><div class="scroll" id="batches"></div></section>
+
+  <section class="card"><h2>Recent activity</h2><div class="scroll" id="activity"></div></section>
+
+  <section class="card">
+    <h2>Settings</h2>
+    <p class="muted small">Changes apply to the next sender run. Test mode restricts every send to the test recipients list and ignores the calendar window.</p>
+    <form id="settingsForm" class="form"></form>
+    <p><button class="primary" id="btnSave">Save settings</button> <span id="saveMsg" class="small"></span></p>
+  </section>
+</main>
+
+<dialog id="contactDlg"><div id="contactBody"></div><p><button onclick="contactDlg.close()">Close</button></p></dialog>
+
+<script>
+"use strict";
+const $ = (s) => document.querySelector(s);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" })[c]);
+const fmt = (n) => (n === null || n === undefined) ? "–" : Number(n).toLocaleString("en-IN");
+const pct = (x) => (x * 100).toFixed(1) + "%";
+const ist = (iso) => iso ? new Date(iso).toLocaleString("en-IN", { timeZone: "Asia/Kolkata", dateStyle: "medium", timeStyle: "short" }) : "–";
+const ago = (iso) => { if (!iso) return "never"; const m = Math.round((Date.now() - Date.parse(iso)) / 60000); return m < 60 ? m + " min ago" : m < 1440 ? Math.round(m/60) + " h ago" : Math.round(m/1440) + " d ago"; };
+
+async function api(path, opts = {}) {
+  const res = await fetch("/dashboard/api/" + path, {
+    ...opts, credentials: "same-origin",
+    headers: { "content-type": "application/json", "x-ibls-dashboard": "1", ...(opts.headers || {}) },
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.error || ("HTTP " + res.status));
+  return body;
+}
+
+let charts = {}, strataRows = [], strataDim = "region", replyFilter = "open", settingsCache = {};
+
+function kpi(label, value, sub, cls) {
+  return `<div class="kpi"><div class="l">${esc(label)}</div><div class="v ${cls || ""}">${value}</div>${sub ? `<div class="s">${sub}</div>` : ""}</div>`;
+}
+
+async function loadSummary() {
+  const d = await api("summary");
+  const k = d.kpis, h = d.health;
+  const pill = $("#statusPill");
+  if (h.paused) { pill.className = "pill bad"; pill.textContent = "PAUSED"; }
+  else if (h.test_mode) { pill.className = "pill warn"; pill.textContent = "TEST MODE"; }
+  else { pill.className = "pill ok"; pill.textContent = d.schedule.window.open ? "LIVE · sending window open" : "LIVE · " + (d.schedule.window.reason || "window closed"); }
+  $("#btnPause").hidden = h.paused; $("#btnResume").hidden = !h.paused;
+
+  let b = "";
+  if (h.paused) b += `<div class="banner bad">Sending is paused: ${esc(h.pause_reason)} ${h.paused_at ? "· since " + esc(ist(h.paused_at)) : ""}</div>`;
+  if (h.test_mode) b += `<div class="banner warn">Test mode is ON: emails go only to the test recipients (${esc(h.test_recipients || "none set")}). Turn it off in Settings to start real outreach.</div>`;
+  if (h.stop_rule_would_pause && !h.paused) b += `<div class="banner bad">${esc(h.stop_rule_would_pause)}</div>`;
+  $("#banners").innerHTML = b;
+
+  const sent = k.sent || 0;
+  $("#kpis").innerHTML = [
+    kpi("Contacts", fmt(k.contacts), `${fmt(k.on_hold)} on hold`),
+    kpi("Sendable", fmt(k.sendable), `${fmt(k.queued)} not yet invited`),
+    kpi("Invited", fmt(k.invited), k.sendable ? pct(k.invited / k.sendable) + " of sendable" : ""),
+    kpi("Reminded", fmt(k.reminded), k.reminded2 ? fmt(k.reminded2) + " twice" : ""),
+    kpi("Delivered / sent", `${fmt(k.delivered)} / ${fmt(sent)}`, `${fmt(k.failed)} failed attempts`),
+    kpi("Hard bounces", fmt(k.bounced_hard), pct(k.hard_bounce_rate), k.hard_bounce_rate > 0.03 ? "bad" : ""),
+    kpi("Soft bounces", fmt(k.bounced_soft), pct(k.soft_bounce_rate)),
+    kpi("Clicks (human)", fmt(k.clicked_human), `CTR ${pct(k.ctr)} · any ${fmt(k.clicked_any)}`),
+    kpi("Started", fmt(k.started), k.organic_started ? `+${fmt(k.organic_started)} without link` : ""),
+    kpi("Completed", fmt(k.completed), k.organic_completed ? `+${fmt(k.organic_completed)} without link` : `${fmt(k.declined)} declined consent`, "ok"),
+    kpi("Completion rate", pct(k.completion_rate), "of invited"),
+    kpi("Opt-outs", fmt(k.opted_out)),
+    kpi("Complaints", fmt(k.complaints), "auto-pause at 3", k.complaints ? "bad" : ""),
+    kpi("Replies to handle", fmt(k.replies_open), "", k.replies_open ? "warn" : ""),
+  ].join("");
+
+  // Funnel
+  const f = d.funnel;
+  drawChart("chartFunnel", { type: "bar", data: { labels: ["Invited", "Clicked", "Started", "Completed"],
+    datasets: [{ data: [f.invited, f.clicked, f.started, f.completed], backgroundColor: ["#1f3a5f", "#3b6ea5", "#6a9fd4", "#15803d"] }] },
+    options: { indexAxis: "y", plugins: { legend: { display: false } }, scales: { x: { beginAtZero: true } } } });
+
+  // Schedule
+  const s = d.schedule, p = s.projection;
+  const target = s.target_end_date;
+  const late = target && p.finishDate && p.finishDate > target;
+  $("#schedule").innerHTML = `
+    <div class="bar" title="invited / sendable"><i style="width:${k.sendable ? Math.min(100, 100 * k.invited / k.sendable) : 0}%"></i></div>
+    <p class="small muted">${fmt(k.invited)} of ${fmt(k.sendable)} sendable contacts invited.</p>
+    <table><tbody>
+      <tr><th>Projected last invite</th><td>${esc(p.lastInviteDate || "–")}</td></tr>
+      <tr><th>Projected finish (last reminder)</th><td class="${late ? "bad" : ""}">${esc(p.finishDate || "done")} ${p.truncated ? "(beyond end date)" : ""}</td></tr>
+      <tr><th>Target end date</th><td>${esc(target || "–")} ${late ? '<span class="bad">· projection is later than target</span>' : ""}</td></tr>
+      <tr><th>Send days remaining</th><td>${fmt(p.sendDays)}</td></tr>
+      <tr><th>Reminder need assumed</th><td>${pct(s.remind_rate_assumed)} of invitees</td></tr>
+      <tr><th>Window now</th><td>${s.window.open ? '<span class="ok">open</span>' : esc(s.window.reason || "closed")}</td></tr>
+    </tbody></table>
+    <table style="margin-top:8px"><thead><tr><th>Mailbox</th><th class="n">Send days used</th><th class="n">Sent today</th><th class="n">Queued</th><th class="n">Awaiting reminder</th></tr></thead><tbody>
+    ${s.mailboxes.map((m) => `<tr><td>${esc(m.mailbox)}</td><td class="n">${fmt(m.send_days_used)}</td><td class="n">${fmt(m.sent_today)}</td><td class="n">${fmt(m.queued)}</td><td class="n">${fmt(m.awaiting_reminder)}</td></tr>`).join("")}
+    </tbody></table>
+    <details class="small"><summary>Next planned days</summary><table><thead><tr><th>Date</th><th class="n">Invites</th><th class="n">Reminders</th></tr></thead><tbody>
+    ${p.days.slice(0, 30).map((x) => `<tr><td>${esc(x.date)}</td><td class="n">${fmt(x.invites)}</td><td class="n">${fmt(x.reminders)}</td></tr>`).join("")}
+    </tbody></table></details>`;
+
+  // Health
+  const jobs = h.jobs || [];
+  const want = ["send", "sync_mail", "sync_kobo", "daily_report"];
+  const byJob = Object.fromEntries(jobs.map((j) => [j.job, j]));
+  const errs = Object.fromEntries((h.last_errors || []).map((j) => [j.job, j]));
+  const sr = h.stop_rules || {};
+  $("#health").innerHTML = `
+    <table><thead><tr><th>Job</th><th>Last run</th><th>Status</th></tr></thead><tbody>
+    ${[...new Set([...want, ...Object.keys(byJob)])].map((j) => { const r = byJob[j]; return `<tr><td>${esc(j)}</td><td title="${esc(ist(r && r.ts))}">${esc(r ? ago(r.ts) : "never")}</td>
+      <td>${r ? (r.ok ? '<span class="ok">ok</span>' : '<span class="bad">error</span>') : "–"} <span class="muted small">${esc(String((r && r.detail) || "").slice(0, 120))}</span>
+      ${errs[j] && (!r || !r.ok || errs[j].ts !== r.ts) ? `<div class="small bad">last error ${esc(ago(errs[j].ts))}: ${esc(String(errs[j].detail || "").slice(0, 120))}</div>` : ""}</td></tr>`; }).join("")}
+    <tr><td>cron (worker)</td><td>${esc(h.cron_last ? ago(h.cron_last.at) : "never")}</td><td>${h.cron_last ? (h.cron_last.ok ? '<span class="ok">ok</span>' : '<span class="bad">' + esc(h.cron_last.error) + "</span>") : "–"}</td></tr>
+    </tbody></table>
+    <p class="small"><b>Stop rules</b><br>
+      Complaints: ${fmt(sr.complaints && sr.complaints.total)} (pause at ${fmt(sr.complaints && sr.complaints.threshold)})<br>
+      Hard-bounce rate: ${sr.bounce ? pct(sr.bounce.rate) + " over last " + fmt(sr.bounce.sends) + " sends (limit " + pct(sr.bounce.threshold) + ", min sample " + fmt(sr.bounce.min_sample) + ")" : "–"}<br>
+      Sender heartbeat: ${sr.heartbeat ? esc(ago(sr.heartbeat.last_send_run)) + " (max " + fmt(sr.heartbeat.max_minutes) + " min in window)" : "–"}
+    </p>
+    <p class="small"><b>Titan bounce guard</b> (mailbox 1h / 24h / 72h · domain 24h / 72h)<br>
+    ${Object.entries(h.bounce_guard || {}).map(([mb, g]) => `${esc(mb)}: ${g.counts.mb_hour} / ${g.counts.mb_day} / ${g.counts.mb_3day} · ${g.counts.dom_day} / ${g.counts.dom_3day} ${g.blocked ? '<span class="bad">BLOCKED</span>' : '<span class="ok">ok</span>'}`).join("<br>")}</p>
+    ${Object.keys(h.quota_blocks || {}).length ? `<p class="small bad">SMTP quota hit today: ${esc(Object.keys(h.quota_blocks).map((x) => x.replace("quota_block:", "")).join(", "))}</p>` : ""}`;
+}
+
+function drawChart(id, cfg) {
+  if (!window.Chart) return;
+  if (charts[id]) charts[id].destroy();
+  charts[id] = new Chart(document.getElementById(id), cfg);
+}
+
+async function loadDaily() {
+  const d = await api("daily");
+  const days = d.days.slice(-60);
+  drawChart("chartDaily", { type: "bar", data: { labels: days.map((x) => x.day.slice(5)), datasets: [
+    { label: "Invites", data: days.map((x) => x.invites), backgroundColor: "#1f3a5f", stack: "s" },
+    { label: "Reminders", data: days.map((x) => x.reminders), backgroundColor: "#6a9fd4", stack: "s" },
+    { label: "Completed", data: days.map((x) => x.completed), type: "line", borderColor: "#15803d", backgroundColor: "#15803d", yAxisID: "y1" },
+  ] }, options: { responsive: true, scales: { y: { beginAtZero: true, stacked: true }, x: { stacked: true }, y1: { beginAtZero: true, position: "right", grid: { drawOnChartArea: false } } } } });
+}
+
+async function loadStrata() { strataRows = (await api("strata")).rows; renderStrata(); }
+function renderStrata() {
+  const rows = strataRows.filter((r) => r.dim === strataDim);
+  $("#strata").innerHTML = `<table><thead><tr><th>${esc(strataDim)}</th><th class="n">Contacts</th><th class="n">Invited</th><th class="n">Clicked</th><th class="n">Started</th><th class="n">Completed</th><th class="n">Resp. rate</th><th class="n">Bounced</th><th class="n">Opt-out</th></tr></thead><tbody>
+    ${rows.map((r) => `<tr><td>${esc(r.value)}</td><td class="n">${fmt(r.contacts)}</td><td class="n">${fmt(r.invited)}</td><td class="n">${fmt(r.clicked)}</td><td class="n">${fmt(r.started)}</td><td class="n">${fmt(r.completed)}</td><td class="n">${r.invited ? pct(r.completed / r.invited) : "–"}</td><td class="n">${fmt(r.bounced)}</td><td class="n">${fmt(r.opted_out)}</td></tr>`).join("")}
+  </tbody></table>`;
+}
+
+async function loadBatches() {
+  const rows = (await api("batches")).rows;
+  $("#batches").innerHTML = rows.length ? `<table><thead><tr><th>Send day (IST)</th><th class="n">Invited</th><th class="n">participate@</th><th class="n">research@</th><th class="n">Reminded</th><th class="n">Clicked</th><th class="n">Started</th><th class="n">Completed</th><th class="n">Resp. rate</th><th class="n">Hard</th><th class="n">Soft</th><th class="n">Opt-out</th><th class="n">Complaints</th></tr></thead><tbody>
+    ${rows.map((r) => `<tr><td>${esc(r.day)}</td><td class="n">${fmt(r.invited)}</td><td class="n">${fmt(r.via_participate)}</td><td class="n">${fmt(r.via_research)}</td><td class="n">${fmt(r.reminded)}</td><td class="n">${fmt(r.clicked)}</td><td class="n">${fmt(r.started)}</td><td class="n">${fmt(r.completed)}</td><td class="n">${r.invited ? pct(r.completed / r.invited) : "–"}</td><td class="n ${r.invited && r.hard / r.invited > 0.03 ? "bad" : ""}">${fmt(r.hard)}</td><td class="n">${fmt(r.soft)}</td><td class="n">${fmt(r.opted_out)}</td><td class="n">${fmt(r.complaints)}</td></tr>`).join("")}
+  </tbody></table>` : '<p class="muted">No invitations sent yet.</p>';
+}
+
+function describeEvent(e) {
+  let m = {}; try { m = JSON.parse(e.meta || "{}"); } catch (_) {}
+  const bits = [];
+  if (m.subject) bits.push("“" + m.subject + "”");
+  if (m.status) bits.push(m.status);
+  if (m.reason) bits.push(m.reason);
+  if (m.error) bits.push(m.error);
+  if (m.country) bits.push(m.country);
+  if (m.actor) bits.push("by " + m.actor);
+  if (m.diff) bits.push(Object.keys(m.diff).join(", "));
+  if (m.source) bits.push(m.source);
+  return bits.join(" · ");
+}
+
+async function loadActivity() {
+  const rows = (await api("activity?limit=80")).rows;
+  $("#activity").innerHTML = `<table><thead><tr><th>When (IST)</th><th>Event</th><th>Contact</th><th>Mailbox</th><th>Detail</th></tr></thead><tbody>
+    ${rows.map((e) => `<tr><td class="small">${esc(ist(e.ts))}</td><td><span class="tag">${esc(e.type)}${e.kind ? " · " + esc(e.kind) : ""}</span>${e.test ? ' <span class="tag">test</span>' : ""}</td>
+      <td>${e.rid ? `<a href="#" data-rid="${esc(e.rid)}">${esc(e.rid)}</a> <span class="muted small">${esc(e.company || "")}</span>` : '<span class="muted">–</span>'}</td>
+      <td class="small">${esc(e.mailbox || "")}</td><td class="small">${esc(describeEvent(e))}</td></tr>`).join("")}
+  </tbody></table>`;
+}
+
+async function loadReplies() {
+  const rows = (await api("replies?filter=" + replyFilter)).rows;
+  $("#replies").innerHTML = rows.length ? `<table><thead><tr><th>Received (IST)</th><th>From</th><th>Subject / snippet</th><th>Class</th><th>Contact</th><th></th></tr></thead><tbody>
+    ${rows.map((r) => `<tr><td class="small">${esc(ist(r.received_at))}<div class="muted small">${esc(r.mailbox || "")}</div></td><td>${esc(r.from_addr)}</td>
+      <td><b>${esc(r.subject)}</b><div class="small muted">${esc(r.snippet)}</div></td><td><span class="tag">${esc(r.classification)}</span></td>
+      <td>${r.rid ? `<a href="#" data-rid="${esc(r.rid)}">${esc(r.rid)}</a><div class="small muted">${esc(r.company || "")}</div>` : "–"}</td>
+      <td>${r.handled ? `<button data-reply="${r.id}" data-h="0">Re-open</button><div class="small muted">${esc(r.handled_by || "")}</div>` : `<button class="primary" data-reply="${r.id}" data-h="1">Mark handled</button>`}</td></tr>`).join("")}
+  </tbody></table>` : '<p class="muted">Nothing here.</p>';
+}
+
+let searchTimer;
+$("#q").addEventListener("input", () => { clearTimeout(searchTimer); searchTimer = setTimeout(doSearch, 300); });
+async function doSearch() {
+  const q = $("#q").value.trim();
+  if (q.length < 2) { $("#results").innerHTML = ""; return; }
+  const rows = (await api("search?q=" + encodeURIComponent(q))).rows;
+  $("#results").innerHTML = rows.length ? `<table><tbody>${rows.map((r) => `<tr><td><a href="#" data-rid="${esc(r.rid)}">${esc(r.rid)}</a>${r.is_test ? ' <span class="tag">test</span>' : ""}</td><td>${esc(r.company)}<div class="small muted">${esc(r.email)}</div></td><td><span class="tag">${esc(r.status)}</span></td></tr>`).join("")}</tbody></table>` : '<p class="muted">No matches.</p>';
+}
+
+async function openContact(rid) {
+  const d = await api("contact/" + encodeURIComponent(rid));
+  const c = d.contact;
+  const fields = ["email", "salutation", "company", "cin", "region", "size_band", "nature", "email_tier", "peer_tier", "mailbox", "send_order", "invited_at", "reminded_at", "reminder_count", "first_click_at", "click_count", "started_at", "completed_at", "consent_declined_at", "bounced", "opted_out_at", "complained_at", "last_reply_at", "notes"];
+  $("#contactBody").innerHTML = `<h3>${esc(c.company)} <span class="tag">${esc(c.status)}</span></h3><p class="muted">${esc(c.rid)}</p>
+    <table><tbody>${fields.map((f) => `<tr><th>${esc(f)}</th><td>${/_at$/.test(f) ? esc(ist(c[f])) : esc(c[f])}</td></tr>`).join("")}</tbody></table>
+    <h4>Timeline</h4><ul class="tl">${d.events.map((e) => `<li><span class="small muted">${esc(ist(e.ts))}</span> <span class="tag">${esc(e.type)}${e.kind ? " · " + esc(e.kind) : ""}</span> <span class="small">${esc(describeEvent(e))}</span></li>`).join("") || "<li class='muted'>No events.</li>"}</ul>
+    ${d.replies.length ? `<h4>Replies</h4><ul>${d.replies.map((r) => `<li><b>${esc(r.subject)}</b> <span class="tag">${esc(r.classification)}</span><div class="small muted">${esc(r.snippet)}</div></li>`).join("")}</ul>` : ""}
+    <h4>Actions</h4>
+    <input type="text" id="statusNote" placeholder="note (optional)" />
+    <p><button data-status="on_hold">Put on hold</button> <button class="danger" data-status="do_not_contact">Do not contact</button> <button data-status="active">Re-activate</button> <span id="statusMsg" class="small"></span></p>`;
+  $("#contactBody").querySelectorAll("[data-status]").forEach((b) => b.addEventListener("click", async () => {
+    try {
+      const r = await api(`contact/${encodeURIComponent(rid)}/status`, { method: "POST", body: JSON.stringify({ status: b.dataset.status, note: $("#statusNote").value }) });
+      $("#statusMsg").textContent = r.error ? r.error : "Saved: " + r.status;
+      if (!r.error) setTimeout(() => openContact(rid), 400);
+    } catch (e) { $("#statusMsg").textContent = e.message; }
+  }));
+  $("#contactDlg").showModal();
+}
+
+document.addEventListener("click", async (ev) => {
+  const a = ev.target.closest("[data-rid]");
+  if (a) { ev.preventDefault(); openContact(a.dataset.rid).catch((e) => alert(e.message)); return; }
+  const r = ev.target.closest("[data-reply]");
+  if (r) { await api("replies/" + r.dataset.reply, { method: "POST", body: JSON.stringify({ handled: r.dataset.h === "1" }) }); loadReplies(); loadSummary(); }
+});
+$("#strataTabs").addEventListener("click", (ev) => { const b = ev.target.closest("button"); if (!b) return; strataDim = b.dataset.d; [...$("#strataTabs").children].forEach((x) => x.classList.toggle("on", x === b)); renderStrata(); });
+$("#replyTabs").addEventListener("click", (ev) => { const b = ev.target.closest("button"); if (!b) return; replyFilter = b.dataset.f; [...$("#replyTabs").children].forEach((x) => x.classList.toggle("on", x === b)); loadReplies(); });
+
+$("#btnPause").addEventListener("click", async () => {
+  const reason = prompt("Why are you pausing sending? (required)");
+  if (!reason) return;
+  await api("pause", { method: "POST", body: JSON.stringify({ reason }) }); refresh();
+});
+$("#btnResume").addEventListener("click", async () => {
+  if (!confirm("Resume sending? Stop-rule counters restart from now.")) return;
+  await api("resume", { method: "POST", body: "{}" }); refresh();
+});
+
+const SETTING_LABELS = {
+  test_mode: "Test mode (true = only test recipients)", test_recipients: "Test recipients (comma separated)",
+  start_date: "Start date (YYYY-MM-DD)", end_date: "Last send date (blank = none)", target_end_date: "Target end date (projection only)",
+  window_start: "Send window start (IST, HH:MM)", window_end: "Send window end (IST, HH:MM)", send_weekdays: "Send weekdays (1=Mon … 7=Sun)",
+  blackout_dates: "Blackout dates (YYYY-MM-DD or a..b, comma separated)", ramp: "Daily cap ramp per mailbox (day1,day2,…)",
+  cap_max: "Max daily cap per mailbox", hourly_cap: "Hourly cap per mailbox", per_run_max: "Max per sender run per mailbox", pace_evenly: "Spread sends evenly across window",
+  reminder_after_workdays: "Reminder after N workdays", reminder2_enabled: "Second reminder enabled", reminder2_after_workdays: "Second reminder after N workdays",
+  postal_address: "Postal address in footer", from_name: "From name", complaint_threshold: "Auto-pause at N complaints",
+  bounce_rate_threshold: "Auto-pause hard-bounce rate (0.03 = 3%)", bounce_window: "Bounce-rate window (sends)", bounce_min_sample: "Bounce-rate minimum sample",
+  heartbeat_max_minutes: "Auto-pause if no sender run for N min",
+  bounce_guard_mailbox_hour: "Titan guard: max bounces/mailbox/hour", bounce_guard_mailbox_day: "Titan guard: max bounces/mailbox/24h",
+  bounce_guard_mailbox_3day: "Titan guard: max bounces/mailbox/72h", bounce_guard_domain_day: "Titan guard: max bounces/domain/24h",
+  bounce_guard_domain_3day: "Titan guard: max bounces/domain/72h",
+};
+const BOOL = new Set(["test_mode", "pace_evenly", "reminder2_enabled"]);
+async function loadSettings() {
+  const d = await api("settings");
+  settingsCache = d.settings;
+  $("#settingsForm").innerHTML = d.editable.map((k) => {
+    const v = d.settings[k] ?? "";
+    const input = BOOL.has(k) ? `<select name="${k}"><option ${v === "true" ? "selected" : ""}>true</option><option ${v === "false" ? "selected" : ""}>false</option></select>`
+      : `<input type="text" name="${k}" value="${esc(v)}" />`;
+    return `<label>${esc(SETTING_LABELS[k] || k)}${input}</label>`;
+  }).join("");
+}
+$("#btnSave").addEventListener("click", async (ev) => {
+  ev.preventDefault();
+  const body = {};
+  new FormData($("#settingsForm")).forEach((v, k) => { if (String(v) !== String(settingsCache[k] ?? "")) body[k] = v; });
+  if (!Object.keys(body).length) { $("#saveMsg").textContent = "No changes."; return; }
+  if (body.test_mode === "false" && !confirm("Turn OFF test mode? Real contacts will start receiving emails during the send window.")) return;
+  try { const r = await api("settings", { method: "POST", body: JSON.stringify(body) }); $("#saveMsg").textContent = "Saved: " + r.changed.join(", "); refresh(); }
+  catch (e) { $("#saveMsg").textContent = e.message; }
+});
+
+async function refresh() {
+  const jobs = [loadSummary(), loadDaily(), loadStrata(), loadBatches(), loadActivity(), loadReplies(), loadSettings()];
+  const res = await Promise.allSettled(jobs);
+  const failed = res.filter((r) => r.status === "rejected");
+  if (failed.length) console.error(failed);
+}
+$("#btnRefresh").addEventListener("click", refresh);
+api("whoami").then((d) => { $("#who").textContent = d.actor; }).catch(() => {});
+refresh();
+setInterval(() => { if (!document.hidden) { loadSummary(); loadActivity(); } }, 120000);
+</script>
+</body>
+</html>

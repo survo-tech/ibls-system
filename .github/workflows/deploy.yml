@@ -1,0 +1,52 @@
+# On push to main: test, apply D1 migrations, sync Worker secrets, deploy the Worker + static site.
+name: deploy
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+concurrency:
+  group: ibls-deploy
+  cancel-in-progress: false
+permissions:
+  contents: read
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: npm ci
+      - name: Tests
+        run: |
+          npx tsc --noEmit
+          node --test test/*.test.mjs
+          pip install -r requirements-dev.txt
+          python -m unittest discover -s tests -t .
+      - name: Use the real D1 database id (repository variable D1_DATABASE_ID)
+        if: ${{ vars.D1_DATABASE_ID != '' }}
+        run: sed -i "s/00000000-0000-0000-0000-000000000000/${{ vars.D1_DATABASE_ID }}/" wrangler.toml
+      - name: Apply D1 migrations
+        run: npx wrangler d1 migrations apply ibls --remote
+      - name: Deploy Worker
+        run: npx wrangler deploy
+      - name: Sync Worker secrets (API_TOKEN, DASHBOARD_USERS)
+        env:
+          API_TOKEN: ${{ secrets.API_TOKEN }}
+          DASHBOARD_USERS: ${{ secrets.DASHBOARD_USERS }}
+        run: |
+          python - <<'PY' > /tmp/secrets.json
+          import json, os
+          print(json.dumps({k: os.environ[k] for k in ("API_TOKEN", "DASHBOARD_USERS") if os.environ.get(k)}))
+          PY
+          if [ "$(cat /tmp/secrets.json)" != "{}" ]; then npx wrangler secret bulk /tmp/secrets.json; fi
+          rm -f /tmp/secrets.json

@@ -1,0 +1,9 @@
+{% extends "_layout.html.j2" %}
+{% block body %}
+<p style="margin:0 0 16px;">{{ salutation }}</p>
+<p style="margin:0 0 16px;">A short reminder of our invitation to {{ company }} to take part in the India Business Leaders Survey, an academic study by researchers at London Business School, MIT and Harvard University (ethics ref. REC1101).</p>
+<p style="margin:0 0 16px;">It takes about 15–20 minutes, and participating firms receive a confidential Peer Benchmark Report for the {{ peer_tier }} segment.</p>
+{% include "_button.html.j2" %}
+<p style="margin:0 0 16px;font-size:13px;color:#6e6e73;">Link: <a href="{{ survey_link }}" style="color:#1f3a5f;">{{ survey_link }}</a></p>
+<p style="margin:0 0 16px;">If someone else at {{ company }} is better placed to answer, please feel free to forward this email. If you have already responded, thank you, and please ignore this note.</p>
+{% endblock %}

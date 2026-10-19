@@ -1,0 +1,47 @@
+# Every 30 minutes, all days: read both mailboxes (bounces, complaints, auto-replies, opt-outs, queries)
+# and pull new KoboToolbox submissions.
+name: sync
+on:
+  schedule:
+    - cron: "7,37 * * * *"
+  workflow_dispatch:
+concurrency:
+  group: ibls-sync
+  cancel-in-progress: false
+permissions:
+  contents: read
+jobs:
+  mail:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Sync mailboxes
+        env:
+          API_BASE: ${{ vars.API_BASE || 'https://survo.tech' }}
+          API_TOKEN: ${{ secrets.API_TOKEN }}
+          SMTP_PASS_PARTICIPATE: ${{ secrets.SMTP_PASS_PARTICIPATE }}
+          SMTP_PASS_RESEARCH: ${{ secrets.SMTP_PASS_RESEARCH }}
+          IMAP_HOST: imap.titan.email
+          IMAP_SINCE: ${{ vars.IMAP_SINCE || '20-Oct-2026' }}
+          FILE_NOISE: ${{ vars.FILE_NOISE || '0' }}
+        run: python jobs/sync_mail.py
+  kobo:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Sync KoboToolbox
+        env:
+          API_BASE: ${{ vars.API_BASE || 'https://survo.tech' }}
+          API_TOKEN: ${{ secrets.API_TOKEN }}
+          KOBO_TOKEN: ${{ secrets.KOBO_TOKEN }}
+          KOBO_ASSET_UID: ${{ secrets.KOBO_ASSET_UID }}
+          KOBO_API_BASE: ${{ vars.KOBO_API_BASE || 'https://kf.kobotoolbox.org' }}
+        run: python jobs/sync_kobo.py

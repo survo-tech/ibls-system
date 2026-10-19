@@ -1,0 +1,27 @@
+# 12:30 UTC (18:00 IST) daily summary email to REPORT_TO from research@survo.tech.
+name: daily-report
+on:
+  schedule:
+    - cron: "30 12 * * *"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Email daily summary
+        env:
+          API_BASE: ${{ vars.API_BASE || 'https://survo.tech' }}
+          API_TOKEN: ${{ secrets.API_TOKEN }}
+          SMTP_PASS_RESEARCH: ${{ secrets.SMTP_PASS_RESEARCH }}
+          REPORT_TO: ${{ secrets.REPORT_TO }}
+          REPORT_FROM: research@survo.tech
+          SMTP_HOST: smtp.titan.email
+          SMTP_PORT: "465"
+        run: python jobs/daily_report.py

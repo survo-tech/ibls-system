@@ -1,0 +1,6 @@
+# Local development secrets for `wrangler dev` (copy to .dev.vars; never commit .dev.vars).
+API_TOKEN=local-test-token-0123456789
+# admin / secret  (sha256("secret"))
+DASHBOARD_USERS=admin:2bb80d537b1da3e38bd30361aa855686bde0eacd7162fef6a25fe97bf527a25b
+# Lets /api/next-batch?now=... fake the clock in local tests. NEVER set in production.
+ALLOW_TIME_OVERRIDE=1

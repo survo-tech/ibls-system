@@ -1,0 +1,2 @@
+-r jobs/requirements.txt
+openpyxl>=3.1

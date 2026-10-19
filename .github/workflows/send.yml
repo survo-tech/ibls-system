@@ -1,0 +1,48 @@
+# Sends due invitations/reminders. Runs every 10 min, 04:30–11:30 UTC (10:00–17:00 IST), Mon–Fri.
+# The Worker is the source of truth for the window, blackout dates, caps, pause and test mode,
+# so a run outside the window just records a heartbeat and exits.
+name: send
+on:
+  schedule:
+    - cron: "30-59/10 4 * * 1-5"
+    - cron: "*/10 5-10 * * 1-5"
+    - cron: "0-30/10 11 * * 1-5"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Render and log only (no SMTP, reservations released)"
+        type: boolean
+        default: false
+concurrency:
+  group: ibls-send
+  cancel-in-progress: false
+permissions:
+  contents: read
+jobs:
+  send:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: jobs/requirements.txt
+      - run: pip install -r jobs/requirements.txt
+      - name: Send
+        env:
+          API_BASE: ${{ vars.API_BASE || 'https://survo.tech' }}
+          API_TOKEN: ${{ secrets.API_TOKEN }}
+          SMTP_PASS_PARTICIPATE: ${{ secrets.SMTP_PASS_PARTICIPATE }}
+          SMTP_PASS_RESEARCH: ${{ secrets.SMTP_PASS_RESEARCH }}
+          SMTP_HOST: smtp.titan.email
+          SMTP_PORT: "465"
+          IMAP_HOST: imap.titan.email
+          JITTER_MIN: "20"
+          JITTER_MAX: "60"
+          RUN_BUDGET_SEC: "540"
+          MAX_PER_RUN: "20"
+          SAVE_SENT: ${{ vars.SAVE_SENT || '0' }}
+          DRY_RUN: ${{ inputs.dry_run && '1' || '0' }}
+        run: python jobs/send.py
