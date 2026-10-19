@@ -99,7 +99,8 @@ class ImportTests(unittest.TestCase):
         q = sorted([r for r in rows if r["status"] == "queued"], key=lambda r: r["send_order"])
         hold = [r for r in rows if r["status"] == "on_hold"]
         self.assertTrue(max(r["send_order"] for r in q) < min(r["send_order"] for r in hold))
-        self.assertEqual([r["mailbox"] for r in q[:4]], ["participate@survo.tech", "research@survo.tech"] * 2)
+        self.assertEqual([r["mailbox"] for r in q[:6]], ["participate@survo.tech", "research@survo.tech", "survey@survo.tech",
+                                                         "study@survo.tech", "team@survo.tech", "participate@survo.tech"])
         # Balance: the first 25% of the order holds roughly 25% of each region.
         first = q[: len(q) // 4]
         for reg in ("North", "South", "East", "West"):

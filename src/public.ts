@@ -69,6 +69,7 @@ export function page(title: string, inner: string): string {
 <div class="head"><p class="head__eyebrow">India Business Leaders Survey</p><h2>${escapeHtml(title)}</h2></div>
 ${inner}
 </section></main>
-<footer class="foot"><p>India Business Leaders Survey · London Business School · MIT · Harvard University · Fieldwork: Morsel Research and Development Pvt Ltd · REC1101</p></footer>
+<footer class="foot"><p>India Business Leaders Survey · London Business School · MIT · Harvard University · Fieldwork: Morsel Research and Development Pvt Ltd · REC1101</p>
+<p>Fieldwork contact: Bishnu Datta Behuria, Morsel Research and Development · <a class="link" href="mailto:bishnu@morselindia.org">bishnu@morselindia.org</a></p></footer>
 </div></body></html>`;
 }

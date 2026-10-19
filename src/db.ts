@@ -1,5 +1,5 @@
 /** Settings access and event ingestion (the single place where contact state changes). */
-import { isoOf } from "./schedule";
+import { DAILY_HARD_MAX, isoOf } from "./schedule";
 import { chunks, normRid, normTs, nowIso, placeholders } from "./util";
 
 export const DEFAULT_SETTINGS: Record<string, string> = {
@@ -14,8 +14,12 @@ export const DEFAULT_SETTINGS: Record<string, string> = {
   window_end: "17:00",
   send_weekdays: "1,2,3,4,5",
   blackout_dates: "2026-11-05..2026-11-11",
-  ramp: "40,70,110,160,220,300",
-  cap_max: "300",
+  warmup_caps: "20,40,60,100,150,200,250",
+  warmup_seed_cap: "5",
+  warmup_max_bounce_rate: "0.02",
+  warmup_stepback_bounce_rate: "0.04",
+  warmup_window_days: "3",
+  cap_max: "450",
   hourly_cap: "120",
   per_run_max: "20",
   pace_evenly: "true",
@@ -24,6 +28,7 @@ export const DEFAULT_SETTINGS: Record<string, string> = {
   reminder2_after_workdays: "5",
   postal_address: "",
   from_name: "India Business Leaders Survey",
+  reply_to: "research@survo.tech",
   complaint_threshold: "3",
   bounce_rate_threshold: "0.03",
   bounce_window: "200",
@@ -32,8 +37,8 @@ export const DEFAULT_SETTINGS: Record<string, string> = {
   bounce_guard_mailbox_hour: "4",
   bounce_guard_mailbox_day: "8",
   bounce_guard_mailbox_3day: "18",
-  bounce_guard_domain_day: "18",
-  bounce_guard_domain_3day: "45",
+  bounce_guard_domain_day: "30",
+  bounce_guard_domain_3day: "75",
   stop_rule_reset_at: "",
   stop_rule_complaint_baseline: "0",
 };
@@ -49,16 +54,22 @@ export const EDITABLE: Record<string, (v: string) => boolean> = {
   window_end: isHHMM,
   send_weekdays: (v) => /^[1-7](\s*,\s*[1-7])*$/.test(v),
   blackout_dates: (v) => v.split(/[\s,;]+/).filter(Boolean).every((p) => /^\d{4}-\d{2}-\d{2}(\.\.\d{4}-\d{2}-\d{2})?$/.test(p)),
-  ramp: (v) => /^\d+(\s*,\s*\d+)*$/.test(v),
-  cap_max: (v) => isInt(v, 0, 2000),
-  hourly_cap: (v) => isInt(v, 0, 1000),
+  warmup_caps: (v) => /^\d+(\s*,\s*\d+)*$/.test(v) && v.split(",").every((n) => +n >= 0 && +n <= DAILY_HARD_MAX),
+  warmup_seed_cap: (v) => isInt(v, 0, 50),
+  warmup_max_bounce_rate: (v) => Number(v) > 0 && Number(v) < 1,
+  warmup_stepback_bounce_rate: (v) => Number(v) > 0 && Number(v) < 1,
+  warmup_window_days: (v) => isInt(v, 1, 30),
+  cap_max: (v) => isInt(v, 0, DAILY_HARD_MAX),
+  hourly_cap: (v) => isInt(v, 0, DAILY_HARD_MAX),
   per_run_max: (v) => isInt(v, 0, 200),
   pace_evenly: (v) => v === "true" || v === "false",
   reminder_after_workdays: (v) => isInt(v, 1, 60),
   reminder2_enabled: (v) => v === "true" || v === "false",
   reminder2_after_workdays: (v) => isInt(v, 1, 60),
   postal_address: (v) => v.length <= 300,
-  from_name: (v) => v.length > 0 && v.length <= 80 && !/[<>"\r\n]/.test(v),
+  from_name: (v) => v.length > 0 && v.length <= 80 && !/[<>"@\r\n]/.test(v),
+  // Replies must land in a mailbox the sync job reads, so Reply-To is restricted to survo.tech.
+  reply_to: (v) => /^[a-z0-9._%+-]+@survo\.tech$/i.test(v),
   complaint_threshold: (v) => isInt(v, 1, 100),
   bounce_rate_threshold: (v) => Number(v) > 0 && Number(v) < 1,
   bounce_window: (v) => isInt(v, 20, 5000),
@@ -104,8 +115,10 @@ export async function setState(db: D1Database, kv: Record<string, string>): Prom
 }
 
 /**
- * Titan bounce guard: count bounces (DSNs the mailbox received + SMTP-time rejects) per mailbox and domain-wide
- * over rolling windows and say whether the mailbox must stop for now. A limit of 0 disables that check.
+ * Bounce guard: count bounces (DSNs the mailbox received + send-time rejects) per mailbox and domain-wide
+ * over rolling windows and say whether the mailbox must stop for now. It is a short-term brake on bounce
+ * spikes (protecting the domain's reputation with Gmail); the warm-up and the stop rules handle the longer
+ * term. A limit of 0 disables that check.
  */
 export async function bounceGuard(db: D1Database, s: Record<string, string>, mailbox: string, now: Date): Promise<{ blocked: boolean; reason?: string; counts: Record<string, number> }> {
   const ago = (h: number) => isoOf(new Date(now.getTime() - h * 3600_000));
@@ -126,7 +139,7 @@ export async function bounceGuard(db: D1Database, s: Record<string, string>, mai
   ];
   for (const [n, lim, msg] of checks) {
     const L = Number(lim);
-    if (L > 0 && n >= L) return { blocked: true, reason: `Titan bounce guard: ${msg} (limit ${L}); sending from this mailbox resumes when the window rolls over`, counts };
+    if (L > 0 && n >= L) return { blocked: true, reason: `Bounce guard: ${msg} (limit ${L}); sending from this mailbox resumes when the window rolls over`, counts };
   }
   return { blocked: false, counts };
 }
@@ -201,18 +214,51 @@ export async function ingestEvents(db: D1Database, events: IncomingEvent[]): Pro
 
   let accepted = 0, duplicate = 0;
   for (const group of chunks(prepared, 50)) {
-    const inserts = group.map((p) =>
-      db.prepare("INSERT INTO events(rid, email, type, kind, mailbox, ts, meta, test, dedupe_key) VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(dedupe_key) DO NOTHING")
-        .bind(p.rid, p.email, p.type, p.kind, p.mailbox, p.ts, JSON.stringify(p.meta), p.test, p.dedupe));
-    const res = await db.batch(inserts);
-    const effects: D1PreparedStatement[] = [];
-    group.forEach((p, i) => {
-      if ((res[i].meta.changes ?? 0) > 0) { accepted++; effects.push(...effectStatements(db, p)); }
-      else duplicate++;
-    });
-    if (effects.length) await db.batch(effects);
+    const r = await ingestGroup(db, group);
+    accepted += r.accepted;
+    duplicate += r.duplicate;
   }
   return { accepted, duplicate, rejected, errors: errors.slice(0, 20) };
+}
+
+/**
+ * Store a group of events and apply their effects in ONE D1 batch (a transaction): either the events and
+ * all their contact/reply updates are stored, or nothing is. A failure therefore leaves nothing half-done,
+ * and the producer's retry is applied normally (previously a failure between the insert and the effects
+ * left an "accepted" event without its effect, and the retry was then ignored as a duplicate, so a sent
+ * contact could stay queued and be sent again). Known dedupe keys are skipped up front; the INSERT has no
+ * ON CONFLICT clause, so a concurrent duplicate aborts the batch and the group is re-checked once.
+ */
+async function ingestGroup(db: D1Database, group: Prepared[]): Promise<{ accepted: number; duplicate: number }> {
+  for (let attempt = 0; ; attempt++) {
+    const keys = [...new Set(group.map((p) => p.dedupe).filter(Boolean) as string[])];
+    const existing = new Set<string>();
+    for (const c of chunks(keys, 90)) {
+      const { results } = await db.prepare(`SELECT dedupe_key FROM events WHERE dedupe_key IN (${placeholders(c.length)})`).bind(...c).all<{ dedupe_key: string }>();
+      for (const r of results) existing.add(r.dedupe_key);
+    }
+    const seen = new Set<string>();
+    const fresh: Prepared[] = [];
+    let duplicate = 0;
+    for (const p of group) {
+      if (p.dedupe && (existing.has(p.dedupe) || seen.has(p.dedupe))) { duplicate++; continue; }
+      if (p.dedupe) seen.add(p.dedupe);
+      fresh.push(p);
+    }
+    if (!fresh.length) return { accepted: 0, duplicate };
+    const stmts = fresh.flatMap((p) => [
+      db.prepare("INSERT INTO events(rid, email, type, kind, mailbox, ts, meta, test, dedupe_key) VALUES (?,?,?,?,?,?,?,?,?)")
+        .bind(p.rid, p.email, p.type, p.kind, p.mailbox, p.ts, JSON.stringify(p.meta), p.test, p.dedupe),
+      ...effectStatements(db, p),
+    ]);
+    try {
+      await db.batch(stmts);
+      return { accepted: fresh.length, duplicate };
+    } catch (e) {
+      if (attempt === 0 && /UNIQUE/i.test(String((e as Error).message || e))) continue; // raced with an identical event
+      throw e;
+    }
+  }
 }
 
 /** SQL side effects of one event. */

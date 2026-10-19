@@ -30,7 +30,7 @@ CREATE TABLE IF NOT EXISTS contacts (
   consent_declined_at TEXT,
   bounced           TEXT,                       -- NULL / 'soft' / 'hard'
   soft_bounce_count INTEGER NOT NULL DEFAULT 0,
-  fail_count        INTEGER NOT NULL DEFAULT 0, -- transient SMTP failures
+  fail_count        INTEGER NOT NULL DEFAULT 0, -- transient send failures
   complained_at     TEXT,
   opted_out_at      TEXT,
   last_reply_at     TEXT,
@@ -50,7 +50,7 @@ CREATE TABLE IF NOT EXISTS events (
   rid        TEXT,
   email      TEXT,
   type       TEXT NOT NULL,   -- sent|failed|bounced_hard|bounced_soft|complaint|reply|auto_reply|opted_out|started|completed|consent_declined|click|admin|released
-  kind       TEXT,            -- invite/reminder/reminder2 for sends; smtp for SMTP-time rejects; organic for Kobo w/o rid
+  kind       TEXT,            -- invite/reminder/reminder2 for sends; smtp for send-time rejects; organic for Kobo w/o rid
   mailbox    TEXT,
   ts         TEXT NOT NULL,
   meta       TEXT,            -- JSON
@@ -138,8 +138,7 @@ INSERT OR IGNORE INTO settings(key, value) VALUES
   ('bounce_window', '200'),
   ('bounce_min_sample', '50'),
   ('heartbeat_max_minutes', '90'),
-  -- Titan bounce limits (support.titan.email "Email Bounce Back"): mailbox 5/h, 10/day, 20/3 days;
-  -- domain 10/h, 20/day, 50/3 days (paid). The guard stops a mailbox just below them.
+  -- Bounce guard (short-term brake on bounce spikes); 0002 raises the domain-wide limits for five mailboxes.
   ('bounce_guard_mailbox_hour', '4'),
   ('bounce_guard_mailbox_day', '8'),
   ('bounce_guard_mailbox_3day', '18'),

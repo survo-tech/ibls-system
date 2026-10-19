@@ -1,4 +1,4 @@
-# Every 30 minutes, all days: read both mailboxes (bounces, complaints, auto-replies, opt-outs, queries)
+# Every 30 minutes, all days: read the five mailboxes via the Gmail API (bounces, complaints, auto-replies, opt-outs, queries)
 # and pull new KoboToolbox submissions.
 name: sync
 on:
@@ -19,14 +19,21 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - run: pip install -r jobs/requirements.txt
       - name: Sync mailboxes
         env:
           API_BASE: ${{ vars.API_BASE || 'https://survo.tech' }}
           API_TOKEN: ${{ secrets.API_TOKEN }}
-          SMTP_PASS_PARTICIPATE: ${{ secrets.SMTP_PASS_PARTICIPATE }}
-          SMTP_PASS_RESEARCH: ${{ secrets.SMTP_PASS_RESEARCH }}
-          IMAP_HOST: imap.titan.email
-          IMAP_SINCE: ${{ vars.IMAP_SINCE || '20-Oct-2026' }}
+          MAILBOXES: ${{ vars.MAILBOXES || 'participate@survo.tech,research@survo.tech,survey@survo.tech,study@survo.tech,team@survo.tech' }}
+          MAIL_TRANSPORT: ${{ vars.MAIL_TRANSPORT || 'gmail_api' }}
+          GOOGLE_SA_JSON: ${{ secrets.GOOGLE_SA_JSON }}
+          # Only used with MAIL_TRANSPORT=smtp (smtp.gmail.com / imap.gmail.com with app passwords):
+          GMAIL_APP_PW_PARTICIPATE: ${{ secrets.GMAIL_APP_PW_PARTICIPATE }}
+          GMAIL_APP_PW_RESEARCH: ${{ secrets.GMAIL_APP_PW_RESEARCH }}
+          GMAIL_APP_PW_SURVEY: ${{ secrets.GMAIL_APP_PW_SURVEY }}
+          GMAIL_APP_PW_STUDY: ${{ secrets.GMAIL_APP_PW_STUDY }}
+          GMAIL_APP_PW_TEAM: ${{ secrets.GMAIL_APP_PW_TEAM }}
+          MAIL_SINCE: ${{ vars.MAIL_SINCE || '2026-10-20' }}
           FILE_NOISE: ${{ vars.FILE_NOISE || '0' }}
         run: python jobs/sync_mail.py
   kobo:

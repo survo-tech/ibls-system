@@ -2,29 +2,27 @@
 """
 Sender job (GitHub Actions, every 10 min in the IST send window).
 
-For each mailbox, in parallel:
-  1. GET /api/next-batch?mailbox=..&max=..&run_id=..  (the Worker applies pause, test mode, window, caps, ordering)
-  2. render each message, send it individually over Titan SMTP (SSL 465) with 20–60 s random jitter
+For each of the five mailboxes, in parallel:
+  1. GET /api/next-batch?mailbox=..&max=..&run_id=..  (the Worker applies pause, test mode, window, blackout,
+     the mailbox's warm-up cap, hourly cap and ordering; invites come from one shared queue)
+  2. render each message and send it individually with 20–60 s random jitter, through the Gmail API
+     (service account + domain-wide delegation) or, with MAIL_TRANSPORT=smtp, smtp.gmail.com:587 STARTTLS
   3. POST the outcome (sent / failed / bounced_hard) right after each message
-  4. stop the mailbox on quota/rate errors (5.4.x, 4.7.x, "quota"), auth errors or repeated failures
+  4. stop the mailbox on quota/rate errors, auth errors or repeated failures
   5. release any reservation it could not use, then POST a heartbeat to /api/job-run
 
 Environment
-  API_BASE (default https://survo.tech), API_TOKEN, SMTP_PASS_PARTICIPATE, SMTP_PASS_RESEARCH
-  SMTP_HOST (smtp.titan.email), SMTP_PORT (465), IMAP_HOST (imap.titan.email) for SAVE_SENT
-  JITTER_MIN (20), JITTER_MAX (60), RUN_BUDGET_SEC (540), MAX_PER_RUN (20), SAVE_SENT (0), SENT_FOLDER (Sent)
+  API_BASE (default https://survo.tech), API_TOKEN, MAILBOXES (the five @survo.tech mailboxes)
+  MAIL_TRANSPORT (gmail_api | smtp), GOOGLE_SA_JSON (gmail_api), GMAIL_APP_PW_<LOCALPART> (smtp)
+  JITTER_MIN (20), JITTER_MAX (60), RUN_BUDGET_SEC (540), MAX_PER_RUN (20), REPLY_TO (fallback if the Worker sends none)
   DRY_RUN (0): render + log only, release reservations, send nothing
 """
 from __future__ import annotations
 
 import concurrent.futures
-import imaplib
 import os
 import random
-import re
 import secrets
-import smtplib
-import socket
 import sys
 import time
 from email.message import EmailMessage
@@ -32,12 +30,13 @@ from email.policy import SMTP as SMTP_POLICY
 from email.utils import formataddr, formatdate
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from common import MAILBOXES, Api, env, iso, log, mailbox_password  # noqa: E402
+from common import DEFAULT_REPLY_TO, MAILBOXES, Api, env, iso, log  # noqa: E402
 from render import render  # noqa: E402
+from transport import (FakeTransport, SmtpTransport, TransportError, classify_smtp_error,  # noqa: E402,F401
+                       make_transport)
 
 DOMAIN = "survo.tech"
-REPLY_TO = "participate@survo.tech"
-QUOTA_RE = re.compile(r"\b(5\.4\.\d+|4\.7\.\d+)\b|quota|limit exceeded|rate limit|too many (messages|recipients|connections)|sending limit", re.I)
+DEFAULT_FROM_NAME = "India Business Leaders Survey"
 
 
 def make_msgid(rid: str, kind: str) -> str:
@@ -49,14 +48,17 @@ def build_message(m: dict, settings: dict, mailbox: str) -> EmailMessage:
     ctx = {k: m[k] for k in ("salutation", "company", "peer_tier", "survey_link", "optout_link")}
     ctx["postal_address"] = settings.get("postal_address") or ""
     subject, text, html = render(m["kind"], ctx)
+    reply_to = (settings.get("reply_to") or env("REPLY_TO", DEFAULT_REPLY_TO)).strip()
     msg = EmailMessage(policy=SMTP_POLICY)
-    msg["From"] = formataddr((settings.get("from_name") or "India Business Leaders Survey", mailbox))
+    # Display name: the study (or a researcher's name, set on the dashboard); address: the sending mailbox.
+    msg["From"] = formataddr((settings.get("from_name") or DEFAULT_FROM_NAME, mailbox))
     msg["To"] = m["email"]
     msg["Subject"] = subject
     msg["Date"] = formatdate(localtime=False)
     msg["Message-ID"] = make_msgid(m["rid"], m["kind"])
-    msg["Reply-To"] = REPLY_TO
-    msg["List-Unsubscribe"] = f"<mailto:{REPLY_TO}?subject=OPT%20OUT>, <{m['optout_link']}>"
+    msg["Reply-To"] = reply_to
+    # RFC 2369 + RFC 8058 one-click: Gmail and Yahoo show "Unsubscribe" and POST List-Unsubscribe=One-Click.
+    msg["List-Unsubscribe"] = f"<mailto:{reply_to}?subject=OPT%20OUT>, <{m['optout_link']}>"
     msg["List-Unsubscribe-Post"] = "List-Unsubscribe=One-Click"
     msg["X-IBLS-RID"] = m["rid"]
     msg["X-IBLS-Kind"] = m["kind"]
@@ -68,66 +70,36 @@ def build_message(m: dict, settings: dict, mailbox: str) -> EmailMessage:
     return msg
 
 
-def classify_smtp_error(exc: Exception) -> tuple[str, int | None, str]:
-    """-> (category, code, text). Categories: hard, soft, quota, auth, conn."""
-    if isinstance(exc, smtplib.SMTPAuthenticationError):
-        return "auth", exc.smtp_code, _txt(exc.smtp_error)
-    if isinstance(exc, smtplib.SMTPRecipientsRefused):
-        code, err = next(iter(exc.recipients.values()))
-        text = _txt(err)
-        if QUOTA_RE.search(text):
-            return "quota", code, text
-        return ("hard" if 500 <= code < 600 else "soft"), code, text
-    if isinstance(exc, (smtplib.SMTPSenderRefused, smtplib.SMTPDataError, smtplib.SMTPResponseException)):
-        code, text = exc.smtp_code, _txt(exc.smtp_error)
-        if QUOTA_RE.search(text) or code == 421:
-            return "quota", code, text
-        return "soft", code, text  # message-level rejection: count as failed, do not mark the address bad
-    if isinstance(exc, (smtplib.SMTPServerDisconnected, socket.error, TimeoutError, ConnectionError)):
-        return "conn", None, str(exc)
-    return "soft", None, repr(exc)
-
-
-def _txt(v) -> str:
-    return v.decode("utf-8", "replace") if isinstance(v, (bytes, bytearray)) else str(v)
-
-
 class MailboxSender:
     def __init__(self, mailbox: str, api: Api, run_id: str, *, dry_run=False, budget=540.0, jitter=(20.0, 60.0),
-                 max_per_run=20, save_sent=False, smtp_factory=None, imap_factory=None, sleep=time.sleep, clock=time.monotonic):
+                 max_per_run=20, transport=None, transport_factory=None, smtp_factory=None, sleep=time.sleep,
+                 clock=time.monotonic, now_fn=None):
         self.mailbox, self.api, self.run_id = mailbox, api, run_id
         self.dry_run, self.budget, self.jitter = dry_run, budget, jitter
-        self.max_per_run, self.save_sent = max_per_run, save_sent
-        self.smtp_factory = smtp_factory or (lambda: smtplib.SMTP_SSL(env("SMTP_HOST", "smtp.titan.email"), int(env("SMTP_PORT", "465")), timeout=60))
-        self.imap_factory = imap_factory or (lambda: imaplib.IMAP4_SSL(env("IMAP_HOST", "imap.titan.email"), 993))
+        self.max_per_run = max_per_run
+        if transport is not None:
+            self._factory = lambda: transport
+        elif smtp_factory is not None:  # SMTP fallback with an injected connection factory (tests)
+            self._factory = lambda: SmtpTransport(mailbox, factory=smtp_factory)
+        else:
+            self._factory = transport_factory or (lambda: make_transport(mailbox))
+        self.transport = None
         self.sleep, self.clock = sleep, clock
-        self.smtp = None
-        self.imap = None
+        # now_fn (local simulations only): a fake clock passed to the Worker as ?now= (honoured only with
+        # ALLOW_TIME_OVERRIDE=1, never in production) and used for event timestamps.
+        self.now_fn = now_fn
         self.stats = {"mailbox": mailbox, "sent": 0, "failed": 0, "hard": 0, "skipped": 0, "reason": "", "quota": False, "error": ""}
 
-    # --- connections -------------------------------------------------------
-    def _connect(self):
-        s = self.smtp_factory()
-        s.login(self.mailbox, mailbox_password(self.mailbox))
-        self.smtp = s
+    def _ts(self) -> str:
+        return iso(self.now_fn()) if self.now_fn else iso()
 
     def _close(self):
-        for c, quit_ in ((self.smtp, "quit"), (self.imap, "logout")):
-            if c is not None:
-                try:
-                    getattr(c, quit_)()
-                except Exception:
-                    pass
-        self.smtp = self.imap = None
-
-    def _append_sent(self, msg: EmailMessage):
-        try:
-            if self.imap is None:
-                self.imap = self.imap_factory()
-                self.imap.login(self.mailbox, mailbox_password(self.mailbox))
-            self.imap.append(env("SENT_FOLDER", "Sent"), "\\Seen", imaplib.Time2Internaldate(time.time()), msg.as_bytes())
-        except Exception as e:  # optional feature: never fail a send because of it
-            log.warning("[%s] IMAP APPEND to Sent failed: %s", self.mailbox, e)
+        if self.transport is not None:
+            try:
+                self.transport.close()
+            except Exception:
+                pass
+        self.transport = None
 
     # --- main loop -----------------------------------------------------------
     def planned_max(self) -> int:
@@ -137,7 +109,10 @@ class MailboxSender:
     def run(self) -> dict:
         start = self.clock()
         want = self.planned_max()
-        batch = self.api.get("/api/next-batch", mailbox=self.mailbox, max=want, run_id=self.run_id)
+        params = {"mailbox": self.mailbox, "max": want, "run_id": self.run_id}
+        if self.now_fn:
+            params["now"] = iso(self.now_fn())
+        batch = self.api.get("/api/next-batch", **params)
         msgs = batch.get("messages", [])
         settings = batch.get("settings", {})
         self.stats["reason"] = batch.get("reason", "") or ""
@@ -169,7 +144,7 @@ class MailboxSender:
                     self.stats["skipped"] += 1
                     continue
                 outcome = self._send_one(m, msg)
-                if outcome in ("quota", "auth", "posting"):
+                if outcome in ("quota", "rate", "auth", "posting"):
                     break
                 consecutive_fail = consecutive_fail + 1 if outcome == "failed" else 0
                 if consecutive_fail >= 3:
@@ -185,24 +160,29 @@ class MailboxSender:
 
     def _send_one(self, m: dict, msg: EmailMessage) -> str:
         meta = {"message_id": msg["Message-ID"], "subject": str(msg["Subject"])}
+        info: dict = {}
         for attempt in (1, 2):
             try:
-                if self.smtp is None:
-                    self._connect()
-                self.smtp.send_message(msg, from_addr=self.mailbox, to_addrs=[m["email"]])
+                if self.transport is None:
+                    self.transport = self._factory()
+                info = self.transport.send(msg, m["email"]) or {}
                 break
-            except Exception as e:  # noqa: BLE001 - classify everything SMTP can throw
-                cat, code, text = classify_smtp_error(e)
+            except TransportError as e:
+                cat, code, text = e.category, e.code, e.text
                 if cat == "conn" and attempt == 1:
                     log.warning("[%s] connection problem (%s); reconnecting", self.mailbox, text)
                     self._close()
                     continue
                 log.warning("[%s] %s -> %s: %s %s", self.mailbox, m["rid"], cat, code, text[:200])
-                ev = {"rid": m["rid"], "email": m["email"], "mailbox": self.mailbox, "kind": m["kind"], "ts": iso(),
+                if cat == "rate":
+                    # Short-term throttling: not the contact's fault. Nothing recorded; the reservation is released.
+                    self.stats["reason"] = f"rate limited: {code} {text[:120]}"
+                    return "rate"
+                ev = {"rid": m["rid"], "email": m["email"], "mailbox": self.mailbox, "kind": m["kind"], "ts": self._ts(),
                       "meta": {**meta, "code": code, "error": text[:300]}}
                 if cat == "hard":
                     ev.update(type="bounced_hard", kind="smtp", id=f"smtp-reject:{m['rid']}:{msg['Message-ID']}")
-                    ev["meta"]["stage"] = "smtp"
+                    ev["meta"]["stage"] = "send"
                     self.stats["hard"] += 1
                 else:
                     ev.update(type="failed")
@@ -210,19 +190,25 @@ class MailboxSender:
                 self._post([ev])
                 if cat == "quota":
                     self.stats["quota"] = True
-                    self.stats["reason"] = f"SMTP quota/rate limit: {code} {text[:120]}"
+                    self.stats["reason"] = f"sending quota/limit: {code} {text[:120]}"
                     return "quota"
                 if cat == "auth":
-                    self.stats["error"] = f"SMTP authentication failed for {self.mailbox}"
+                    self.stats["error"] = f"authentication/configuration failed for {self.mailbox}: {text[:160]}"
                     return "auth"
                 return "hard" if cat == "hard" else "failed"
         else:
             return "failed"
         self.stats["sent"] += 1
-        if self.save_sent:
-            self._append_sent(msg)
+        # Gmail may rewrite Message-ID; keep ours for de-duplication and record the one recipients see.
+        if info.get("message_id") and info["message_id"] != msg["Message-ID"]:
+            meta["our_message_id"] = msg["Message-ID"]
+            meta["message_id"] = info["message_id"]
+        for k in ("gmail_id", "thread_id"):
+            if info.get(k):
+                meta[k] = info[k]
+        meta["transport"] = getattr(self.transport, "name", "unknown")
         ok = self._post([{"rid": m["rid"], "email": m["email"], "type": "sent", "kind": m["kind"], "mailbox": self.mailbox,
-                          "ts": iso(), "meta": meta, "id": f"sent:{msg['Message-ID']}"}])
+                          "ts": self._ts(), "meta": meta, "id": f"sent:{msg['Message-ID']}"}])
         return "sent" if ok else "posting"
 
     def _post(self, events: list[dict]) -> bool:
@@ -244,7 +230,6 @@ def main() -> int:
         budget=float(env("RUN_BUDGET_SEC", "540")),
         jitter=(float(env("JITTER_MIN", "20")), float(env("JITTER_MAX", "60"))),
         max_per_run=int(env("MAX_PER_RUN", "20")),
-        save_sent=env("SAVE_SENT", "0") == "1",
     )
     results = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=len(MAILBOXES)) as ex:

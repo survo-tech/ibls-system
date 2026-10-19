@@ -4,10 +4,14 @@ Seed (or reset) test contacts for an end-to-end dry run with real email.
 
   python3 scripts/seed_test.py --emails you@example.com,colleague@example.org [--apply --remote|--local]
 
-* Creates contacts TEST0001.. with is_test=1, status queued, alternating mailboxes, a fake company name.
+* Creates contacts TEST0001.. with is_test=1, status queued, a fake company name, assigned round-robin to the
+  five sending mailboxes. A test contact is only ever sent from its own mailbox, so each mailbox gets its own
+  seed test (this is also what moves a mailbox past warm-up stage 0, the seed-test day).
+* --per-mailbox: every address gets one test contact per mailbox, using plus-addressing
+  (you+participate@gmail.com, you+research@gmail.com, …), so each address receives a message from every mailbox.
 * Re-running resets them to queued (clears invited/reminded/click/bounce state) so you can test again.
 * Sets the `test_recipients` setting to these emails and FORCES test_mode=true.
-Test contacts are excluded from all dashboard statistics and from the ramp-day count.
+Test contacts are excluded from all dashboard statistics; only the seed-test day of the warm-up counts them.
 """
 from __future__ import annotations
 
@@ -17,21 +21,34 @@ import subprocess
 import sys
 from pathlib import Path
 
-MAILBOXES = ["participate@survo.tech", "research@survo.tech"]
+MAILBOXES = ["participate@survo.tech", "research@survo.tech", "survey@survo.tech", "study@survo.tech", "team@survo.tech"]
+
+
+def expand_per_mailbox(emails: list[str]) -> list[tuple[str, str]]:
+    """[(email, mailbox)]: one plus-addressed variant of every address for every mailbox."""
+    out = []
+    for e in emails:
+        local, domain = e.split("@", 1)
+        base = local.split("+", 1)[0]
+        for mb in MAILBOXES:
+            out.append((f"{base}+{mb.split('@')[0]}@{domain}", mb))
+    return out
 
 
 def q(s: str) -> str:
     return "'" + s.replace("'", "''") + "'"
 
 
-def build_sql(emails: list[str]) -> str:
+def build_sql(emails: list[str], per_mailbox: bool = False) -> str:
+    pairs = expand_per_mailbox(emails) if per_mailbox else [(e, MAILBOXES[i % len(MAILBOXES)]) for i, e in enumerate(emails)]
+    emails = [e for e, _ in pairs]
     lines = []
-    for i, e in enumerate(emails, start=1):
+    for i, (e, mb) in enumerate(pairs, start=1):
         rid = f"TEST{i:04d}"
         lines.append(
             "INSERT INTO contacts (rid, email, salutation, company, region, size_band, nature, peer_tier, email_tier, mailbox, status, send_order, is_test)"
             f" VALUES ({q(rid)}, {q(e)}, 'Dear Tester,', {q(f'Test Company {i} Private Limited')}, 'North', '10-100cr', 'Manufacturing',"
-            f" '₹10–100 crore manufacturing', 'TEST', {q(MAILBOXES[(i - 1) % 2])}, 'queued', {-1000 + i}, 1)"
+            f" '₹10–100 crore manufacturing', 'TEST', {q(mb)}, 'queued', {-1000 + i}, 1)"
             " ON CONFLICT(rid) DO UPDATE SET email=excluded.email, mailbox=excluded.mailbox, status='queued', is_test=1,"
             " invited_at=NULL, invite_msgid=NULL, reminded_at=NULL, reminder_count=0, first_click_at=NULL, click_count=0,"
             " started_at=NULL, completed_at=NULL, consent_declined_at=NULL, bounced=NULL, soft_bounce_count=0, fail_count=0,"
@@ -45,6 +62,7 @@ def build_sql(emails: list[str]) -> str:
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--emails", required=True, help="comma-separated allowlist")
+    ap.add_argument("--per-mailbox", action="store_true", help="one plus-addressed test contact per address and mailbox")
     ap.add_argument("--out", default="build/seed_test.sql")
     ap.add_argument("--db", default="ibls")
     ap.add_argument("--apply", action="store_true")
@@ -59,8 +77,9 @@ def main(argv=None) -> int:
         return 2
     out = Path(a.out)
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(build_sql(emails), encoding="utf-8")
-    print(f"wrote {out} for {len(emails)} test recipient(s)")
+    out.write_text(build_sql(emails, a.per_mailbox), encoding="utf-8")
+    n = len(emails) * (len(MAILBOXES) if a.per_mailbox else 1)
+    print(f"wrote {out} for {n} test contact(s)")
     if a.apply:
         if not (a.remote or a.local):
             print("--apply needs --remote or --local", file=sys.stderr)

@@ -2,26 +2,37 @@
 """
 Mailbox sync job (GitHub Actions, every 30 min).
 
-For each mailbox: read new INBOX messages since the last processed UID (tracked in the Worker as state
-`imap:<mailbox>` = "<uidvalidity>:<last_uid>"), classify them (bounce / complaint / auto-reply / opt-out / query)
-and POST events. Messages are fetched with BODY.PEEK so their \\Seen flag is untouched (researchers still see
-them as unread). Mail is never deleted. With FILE_NOISE=1, bounces / auto-replies / complaints are moved to
-IBLS/Bounces, IBLS/Auto-replies, IBLS/Complaints (only if the server supports MOVE); queries stay in INBOX.
+For each of the five mailboxes: read new INBOX mail, classify it (bounce / complaint / auto-reply / opt-out /
+query, see mailclass.py) and POST events to the Worker. Mail is never deleted and never marked read.
 
-Environment: API_BASE, API_TOKEN, SMTP_PASS_PARTICIPATE, SMTP_PASS_RESEARCH (same Titan passwords),
-IMAP_HOST (imap.titan.email), IMAP_SINCE (first-run start date, default 20-Oct-2026), MAX_MSGS (300), FILE_NOISE (0)
+Gmail API mode (default, MAIL_TRANSPORT=gmail_api): service account + domain-wide delegation impersonating each
+mailbox. The cursor is state `gmail:<mailbox>` = {"history_id", "synced_at"}: new mail is read with
+users.history.list (messageAdded, INBOX) since the stored historyId; on the first run, or when Gmail has expired
+the history (404), with a users.messages.list query "in:inbox after:<epoch>". Messages are fetched with
+format=raw. A reply without our headers is matched to its contact through the Gmail thread (our sent message in
+the same thread carries X-IBLS-RID). With FILE_NOISE=1, bounces / auto-replies / complaints get an IBLS/* label
+and leave the INBOX (archived, still unread); queries stay in the INBOX.
+
+IMAP fallback (MAIL_TRANSPORT=smtp): imap.gmail.com:993 with the mailbox's app password. Cursor state
+`imap:<mailbox>` = "<uidvalidity>:<last_uid>", BODY.PEEK fetches, IMAP MOVE for FILE_NOISE.
+
+Environment: API_BASE, API_TOKEN, MAILBOXES, MAIL_TRANSPORT, GOOGLE_SA_JSON | GMAIL_APP_PW_<LOCALPART>,
+MAIL_SINCE (first-run start date YYYY-MM-DD, default 2026-10-20), MAX_MSGS (500), FILE_NOISE (0), IMAP_HOST (imap.gmail.com)
 """
 from __future__ import annotations
 
+import datetime as _dt
 import email.utils
 import imaplib
+import json
 import os
 import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from common import MAILBOXES, Api, env, iso, log, mailbox_password  # noqa: E402
-from mailclass import classify  # noqa: E402
+from common import MAILBOXES, Api, app_password, env, iso, log, mail_transport  # noqa: E402
+from gmail_api import SCOPES, GmailApiError, GmailClient, ServiceAccount, b64url_decode, header_value  # noqa: E402
+from mailclass import RID_VALUE_RE, classify  # noqa: E402
 
 NOISE_FOLDERS = {"bounced_hard": "IBLS/Bounces", "bounced_soft": "IBLS/Bounces", "dsn_delayed": "IBLS/Bounces",
                  "auto_reply": "IBLS/Auto-replies", "complaint": "IBLS/Complaints"}
@@ -81,13 +92,18 @@ def uidvalidity(imap) -> str:
     return m.group(1).decode() if m else "0"
 
 
+def mail_since() -> _dt.date:
+    return _dt.date.fromisoformat(env("MAIL_SINCE", "2026-10-20"))
+
+
 def sync_mailbox(api: Api, mailbox: str, imap_factory=None, max_msgs: int | None = None, file_noise: bool | None = None) -> dict:
-    max_msgs = max_msgs or int(env("MAX_MSGS", "300"))
+    """IMAP fallback (MAIL_TRANSPORT=smtp): imap.gmail.com with the mailbox's app password."""
+    max_msgs = max_msgs or int(env("MAX_MSGS", "500"))
     file_noise = env("FILE_NOISE", "0") == "1" if file_noise is None else file_noise
-    imap = (imap_factory or (lambda: imaplib.IMAP4_SSL(env("IMAP_HOST", "imap.titan.email"), 993)))()
-    stats = {"mailbox": mailbox, "fetched": 0, "posted": 0, "by_type": {}}
+    imap = (imap_factory or (lambda: imaplib.IMAP4_SSL(env("IMAP_HOST", "imap.gmail.com"), 993)))()
+    stats = {"mailbox": mailbox, "transport": "imap", "fetched": 0, "posted": 0, "by_type": {}}
     try:
-        imap.login(mailbox, mailbox_password(mailbox))
+        imap.login(mailbox, app_password(mailbox))
         imap.select("INBOX", readonly=not file_noise)
         uv = uidvalidity(imap)
         key = f"imap:{mailbox}"
@@ -97,7 +113,7 @@ def sync_mailbox(api: Api, mailbox: str, imap_factory=None, max_msgs: int | None
             last = int(saved.split(":", 1)[1] or 0)
             typ, data = imap.uid("SEARCH", None, f"UID {last + 1}:*")
         else:
-            since = env("IMAP_SINCE", "20-Oct-2026")
+            since = mail_since().strftime("%d-%b-%Y")
             typ, data = imap.uid("SEARCH", None, f"SINCE {since}")
         uids = sorted(int(u) for u in (data[0].split() if data and data[0] else []) if int(u) > last)[:max_msgs]
         events, moves, max_uid = [], [], last
@@ -150,12 +166,155 @@ def move_messages(imap, moves: list[tuple[int, str]]) -> int:
     return n
 
 
+# --- Gmail API ---------------------------------------------------------------------------------------
+IST = _dt.timezone(_dt.timedelta(hours=5, minutes=30))
+
+
+def _since_epoch(saved: dict) -> int:
+    if saved.get("synced_at"):
+        return max(0, int(saved["synced_at"]) - 3600)  # one hour of overlap; event ids make re-reads harmless
+    d = mail_since()
+    return int(_dt.datetime(d.year, d.month, d.day, tzinfo=IST).timestamp())
+
+
+def _new_ids_from_history(client: GmailClient, start: str, limit: int) -> tuple[list[str], str, bool]:
+    """-> (message ids in arrival order, history id to store, truncated). Raises GmailApiError(404) if expired."""
+    ids, seen, token, cursor = [], set(), None, None
+    while True:
+        r = client.list_history(start, page_token=token)
+        for h in r.get("history", []) or []:
+            added = [a.get("message", {}) for a in h.get("messagesAdded", []) or []]
+            fresh = [m["id"] for m in added if m.get("id") and m["id"] not in seen and "INBOX" in (m.get("labelIds") or ["INBOX"])]
+            if fresh and len(ids) + len(fresh) > limit:
+                return ids, cursor or start, True  # stop at a record boundary; the rest is read next run
+            for i in fresh:
+                seen.add(i)
+                ids.append(i)
+            cursor = str(h.get("id") or cursor or "") or None
+        token = r.get("nextPageToken")
+        if not token:
+            return ids, str(r.get("historyId") or cursor or start), False
+
+
+def _ids_from_query(client: GmailClient, after_epoch: int, limit: int) -> tuple[list[str], bool]:
+    """INBOX message ids received after `after_epoch`, oldest first."""
+    ids, token = [], None
+    while True:
+        r = client.list_messages(f"in:inbox after:{after_epoch}", page_token=token)
+        ids.extend(m["id"] for m in r.get("messages", []) or [])
+        token = r.get("nextPageToken")
+        if not token:
+            break
+    ids.reverse()  # the API lists newest first
+    return ids[:limit], len(ids) > limit
+
+
+def thread_rid(client: GmailClient, thread_id: str) -> str | None:
+    """RID of our own message in the same Gmail thread (sent messages carry X-IBLS-RID)."""
+    try:
+        t = client.get_thread(thread_id, ["X-IBLS-RID"])
+    except GmailApiError as e:
+        log.info("[%s] thread lookup failed: %s", client.mailbox, e)
+        return None
+    for m in t.get("messages", []) or []:
+        v = header_value(m.get("payload") or {}, "X-IBLS-RID")
+        if v and RID_VALUE_RE.fullmatch(v.strip()):
+            return v.strip().upper()
+    return None
+
+
+def _label_ids(client: GmailClient, names: set[str]) -> dict[str, str]:
+    have = {lab.get("name"): lab.get("id") for lab in client.list_labels()}
+    return {n: have.get(n) or client.create_label(n).get("id") for n in sorted(names)}
+
+
+def sync_mailbox_gmail(api: Api, mailbox: str, client: GmailClient | None = None, max_msgs: int | None = None,
+                       file_noise: bool | None = None) -> dict:
+    """Gmail API mode: history (or query) since the last sync, format=raw fetch, classify, post, then advance."""
+    max_msgs = max_msgs or int(env("MAX_MSGS", "500"))
+    file_noise = env("FILE_NOISE", "0") == "1" if file_noise is None else file_noise
+    client = client or GmailClient(mailbox, ServiceAccount.shared(), SCOPES)
+    stats = {"mailbox": mailbox, "transport": "gmail_api", "fetched": 0, "posted": 0, "by_type": {}}
+    key = f"gmail:{mailbox}"
+    raw_state = api.state(key).get(key, "")
+    try:
+        saved = json.loads(raw_state) if raw_state else {}
+    except ValueError:
+        saved = {}
+    # Read the mailbox's current historyId BEFORE listing, so nothing arriving meanwhile is skipped.
+    profile_hist = str(client.profile().get("historyId") or "")
+    new_hist: str | None
+    if saved.get("history_id"):
+        try:
+            ids, new_hist, truncated = _new_ids_from_history(client, str(saved["history_id"]), max_msgs)
+            stats["mode"] = "history"
+        except GmailApiError as e:
+            if e.status != 404:
+                raise
+            log.info("[%s] history %s expired; falling back to a query", mailbox, saved["history_id"])
+            ids, truncated = _ids_from_query(client, _since_epoch(saved), max_msgs)
+            new_hist = None if truncated else profile_hist
+            stats["mode"] = "query (history expired)"
+    else:
+        ids, truncated = _ids_from_query(client, _since_epoch(saved), max_msgs)
+        new_hist = None if truncated else profile_hist
+        stats["mode"] = "query"
+
+    events, relabel, last_ts = [], [], int(saved.get("synced_at") or 0)
+    for mid in ids:
+        try:
+            m = client.get_message(mid, fmt="raw")
+        except GmailApiError as e:
+            if e.status == 404:  # deleted between listing and fetching
+                continue
+            raise
+        internal = int(m.get("internalDate") or 0)
+        last_ts = max(last_ts, internal // 1000)
+        if "INBOX" not in (m.get("labelIds") or []):
+            continue  # our own sent copies, drafts, mail already filed by a researcher
+        raw = b64url_decode(m.get("raw", ""))
+        stats["fetched"] += 1
+        ts = iso(_dt.datetime.fromtimestamp(internal / 1000, _dt.timezone.utc)) if internal else msg_ts(raw, None)
+        c = classify(raw, own_addresses=tuple(MAILBOXES))
+        if not c.get("rid") and c["type"] in ("query", "opted_out", "auto_reply") and m.get("threadId"):
+            c["rid"] = thread_rid(client, m["threadId"])
+        stats["by_type"][c["type"]] = stats["by_type"].get(c["type"], 0) + 1
+        ev = to_event(c, mailbox, f"mail:{mailbox}:gmail:{mid}", ts)
+        if ev:
+            events.append(ev)
+        if file_noise and c["type"] in NOISE_FOLDERS:
+            relabel.append((mid, NOISE_FOLDERS[c["type"]]))
+    if events:
+        r = api.events(events)  # raises if the Worker is unreachable: the cursor then stays where it was
+        stats["posted"] = r.get("accepted", 0)
+        stats["duplicate"] = r.get("duplicate", 0)
+    # A truncated query run keeps no history id, so the next run continues by time from the last message read.
+    api.set_state(**{key: json.dumps({"history_id": new_hist or "", "synced_at": last_ts})})
+    if truncated:
+        stats["truncated"] = True
+    if relabel:
+        label_for = _label_ids(client, {f for _, f in relabel})
+        n = 0
+        for mid, folder in relabel:
+            try:
+                client.modify(mid, add=[label_for[folder]], remove=["INBOX"])  # archive with a label; never read/delete
+                n += 1
+            except GmailApiError as e:
+                log.warning("[%s] could not label %s: %s", mailbox, mid, e)
+        stats["moved"] = n
+    return stats
+
+
 def main() -> int:
     api = Api()
     results, ok = [], True
+    mode = mail_transport()
+    if mode == "fake":
+        # Fake mode exists for local send simulations; reading mail always needs a real mailbox (or a test fake).
+        raise SystemExit("sync_mail does not support MAIL_TRANSPORT=fake; tests inject FakeGmailClient / a fake IMAP")
     for mb in MAILBOXES:
         try:
-            results.append(sync_mailbox(api, mb))
+            results.append(sync_mailbox(api, mb) if mode == "smtp" else sync_mailbox_gmail(api, mb))
         except Exception as e:  # noqa: BLE001
             log.exception("[%s] sync failed", mb)
             results.append({"mailbox": mb, "error": str(e)[:300]})

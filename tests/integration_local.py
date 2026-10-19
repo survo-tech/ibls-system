@@ -1,6 +1,6 @@
 """
 Integration test: the real Python jobs against a running local Worker (wrangler dev --local),
-with SMTP/IMAP/Kobo faked. Skipped unless IBLS_BASE is set (scripts/local_e2e.sh sets it).
+with the mail transport (Gmail API), the Gmail mailbox and Kobo faked. Skipped unless IBLS_BASE is set (scripts/local_e2e.sh sets it).
 Expects a FRESH local DB with the two seeded test contacts (TEST0001 participate@, TEST0002 research@).
 """
 import base64
@@ -9,7 +9,7 @@ import os
 import unittest
 import urllib.request
 
-from tests.helpers import FakeSMTP
+from tests.test_gmail import GMAIL_DSN, FakeGmailClient
 from tests.test_mail import DSN_HARD, FakeIMAP
 from tests.test_kobo_report_import import FakeResp
 
@@ -30,17 +30,23 @@ class JobsAgainstLocalWorker(unittest.TestCase):
         import sync_mail
         from common import Api
 
+        from transport import FakeTransport
+
         api = Api(base=BASE, token=os.environ.get("IBLS_TOKEN", "local-test-token-0123456789"))
         smtps = {}
         results = {}
-        for mb in ("participate@survo.tech", "research@survo.tech"):
-            smtp = FakeSMTP()
-            smtps[mb] = smtp
-            s = send.MailboxSender(mb, api, "it-run", jitter=(0, 0), smtp_factory=lambda smtp=smtp: smtp, sleep=lambda x: None)
+        for mb in ("participate@survo.tech", "research@survo.tech", "survey@survo.tech", "study@survo.tech", "team@survo.tech"):
+            t = FakeTransport(mb)
+            smtps[mb] = t
+            s = send.MailboxSender(mb, api, "it-run", jitter=(0, 0), transport=t, sleep=lambda x: None)
             results[mb] = s.run()
         # test mode: exactly the two seeded test contacts, one per mailbox
         self.assertEqual(results["participate@survo.tech"]["sent"], 1, results)
         self.assertEqual(results["research@survo.tech"]["sent"], 1, results)
+        # the other three mailboxes have no seeded test contact of their own, so they send nothing in test mode
+        self.assertEqual(sum(results[mb]["sent"] for mb in ("survey@survo.tech", "study@survo.tech", "team@survo.tech")), 0, results)
+        self.assertIn("survo.tech", smtps["research@survo.tech"].sent[0]["From"])
+        self.assertIn("<research@survo.tech>", smtps["research@survo.tech"].sent[0]["From"])
         m = smtps["participate@survo.tech"].sent[0]
         self.assertEqual(m["To"], "tester1@example.com")
         self.assertEqual(m["X-IBLS-RID"], "TEST0001")
@@ -49,14 +55,20 @@ class JobsAgainstLocalWorker(unittest.TestCase):
         self.assertEqual(dash("contact/TEST0001")["contact"]["invite_msgid"], m["Message-ID"])
 
         # a second run finds nothing (already invited, reminders not due)
-        again = send.MailboxSender("participate@survo.tech", api, "it-run-2", jitter=(0, 0), smtp_factory=FakeSMTP, sleep=lambda x: None).run()
+        again = send.MailboxSender("participate@survo.tech", api, "it-run-2", jitter=(0, 0), transport=FakeTransport(), sleep=lambda x: None).run()
         self.assertEqual(again["sent"], 0)
 
-        # bounce for TEST0001 arrives via IMAP
-        raw = DSN_HARD.replace(b"IBGONE22", b"TEST0001").replace(b"gone@acme.example", b"tester1@example.com")
-        st = sync_mail.sync_mailbox(api, "participate@survo.tech", imap_factory=lambda: FakeIMAP({1: raw}), file_noise=False)
+        # bounce for TEST0001 arrives in the participate@ Gmail inbox (Gmail API sync)
+        raw = GMAIL_DSN.replace(b"IBDSNG55", b"TEST0001").replace(b"nobody@acme.example", b"tester1@example.com")
+        gm = FakeGmailClient("participate@survo.tech", {"g1": (raw, ["INBOX", "UNREAD"], 1793000000000, "t1")}, history_id="77")
+        st = sync_mail.sync_mailbox_gmail(api, "participate@survo.tech", client=gm, file_noise=False)
         self.assertEqual(st["posted"], 1)
         self.assertEqual(dash("contact/TEST0001")["contact"]["status"], "bounced")
+        self.assertEqual(json.loads(api.state("gmail:participate@survo.tech")["gmail:participate@survo.tech"])["history_id"], "77")
+        # IMAP fallback path (MAIL_TRANSPORT=smtp) against the same Worker: duplicate-safe
+        raw2 = DSN_HARD.replace(b"IBGONE22", b"TEST0001").replace(b"gone@acme.example", b"tester1@example.com")
+        st2 = sync_mail.sync_mailbox(api, "participate@survo.tech", imap_factory=lambda: FakeIMAP({1: raw2}), file_noise=False)
+        self.assertEqual(st2["fetched"], 1)
 
         # TEST0002 completes the survey (Kobo)
         subs = {"results": [{"_id": 501, "rid": "TEST0002", "section_consent/consent": "1", "end": "2026-10-20T12:00:00+05:30"}], "next": None}

@@ -14,7 +14,8 @@ export interface Env {
   ALLOW_TIME_OVERRIDE?: string; // local tests only
 }
 
-export const DEFAULT_MAILBOXES = ["participate@survo.tech", "research@survo.tech"];
+/** The five Google Workspace sending mailboxes (override with the MAILBOXES var, comma separated). */
+export const DEFAULT_MAILBOXES = ["participate@survo.tech", "research@survo.tech", "survey@survo.tech", "study@survo.tech", "team@survo.tech"];
 
 export function mailboxes(env: Env): string[] {
   const v = (env.MAILBOXES || "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);

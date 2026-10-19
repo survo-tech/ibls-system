@@ -1,4 +1,4 @@
-"""Shared fakes for the job tests (no network, no real SMTP/IMAP)."""
+"""Shared fakes for the job tests (no network, no real Gmail API / SMTP / IMAP)."""
 import os
 import sys
 
@@ -6,8 +6,21 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "jobs"))
 sys.path.insert(0, os.path.join(ROOT, "scripts"))
 os.environ.setdefault("API_TOKEN", "test-token-0123456789")
-os.environ.setdefault("SMTP_PASS_PARTICIPATE", "pw-participate")
-os.environ.setdefault("SMTP_PASS_RESEARCH", "pw-research")
+for _lp in ("participate", "research", "survey", "study", "team"):
+    os.environ.setdefault("GMAIL_APP_PW_" + _lp.upper(), "pw-" + _lp)
+os.environ.pop("MAIL_TRANSPORT", None)
+os.environ.pop("GOOGLE_SA_JSON", None)
+os.environ.pop("GOOGLE_SA_FILE", None)
+
+# Safety net: no test may reach Google (or any host). Every Gmail call must go through an injected fake http.
+import gmail_api  # noqa: E402
+
+
+def _no_network(method, url, headers, body, timeout=60):
+    raise AssertionError(f"test tried a real network call: {method} {url}")
+
+
+gmail_api.urllib_http = _no_network
 
 
 class FakeApi:
@@ -54,7 +67,7 @@ class FakeApi:
 
 
 class FakeSMTP:
-    """Mimics smtplib.SMTP_SSL; `script` maps recipient -> exception to raise."""
+    """Mimics an smtplib.SMTP connection after STARTTLS; `script` maps recipient -> exception to raise."""
     instances = []
 
     def __init__(self, script=None):

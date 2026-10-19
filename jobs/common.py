@@ -13,8 +13,9 @@ import urllib.request
 log = logging.getLogger("ibls")
 logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(message)s")
 
-MAILBOXES = [m.strip().lower() for m in os.environ.get("MAILBOXES", "participate@survo.tech,research@survo.tech").split(",") if m.strip()]
-SECRET_ENV_FOR = {"participate@survo.tech": "SMTP_PASS_PARTICIPATE", "research@survo.tech": "SMTP_PASS_RESEARCH"}
+DEFAULT_MAILBOXES = "participate@survo.tech,research@survo.tech,survey@survo.tech,study@survo.tech,team@survo.tech"
+MAILBOXES = [m.strip().lower() for m in os.environ.get("MAILBOXES", DEFAULT_MAILBOXES).split(",") if m.strip()]
+DEFAULT_REPLY_TO = "research@survo.tech"
 
 
 def iso(dt: _dt.datetime | None = None) -> str:
@@ -32,10 +33,24 @@ def env(name: str, default: str | None = None, required: bool = False) -> str:
     return v or ""
 
 
-def mailbox_password(mailbox: str) -> str:
-    """SMTP/IMAP password for a mailbox: SMTP_PASS_PARTICIPATE / SMTP_PASS_RESEARCH."""
-    name = SECRET_ENV_FOR.get(mailbox) or "SMTP_PASS_" + mailbox.split("@")[0].upper().replace("-", "_").replace(".", "_")
-    return env(name, required=True)
+def app_password_env(mailbox: str) -> str:
+    """Name of the GitHub secret / env var holding a mailbox's Google app password: GMAIL_APP_PW_<LOCALPART>."""
+    return "GMAIL_APP_PW_" + mailbox.split("@")[0].upper().replace("-", "_").replace(".", "_").replace("+", "_")
+
+
+def app_password(mailbox: str) -> str:
+    """Google app password for SMTP/IMAP fallback mode (MAIL_TRANSPORT=smtp). Spaces Google shows are removed."""
+    return env(app_password_env(mailbox), required=True).replace(" ", "")
+
+
+def mail_transport() -> str:
+    """gmail_api (default), smtp (smtp.gmail.com + imap.gmail.com with app passwords) or fake (local tests only)."""
+    v = env("MAIL_TRANSPORT", "gmail_api").strip().lower()
+    aliases = {"": "gmail_api", "api": "gmail_api", "gmail": "gmail_api", "gmail-api": "gmail_api"}
+    v = aliases.get(v, v)
+    if v not in ("gmail_api", "smtp", "fake"):
+        raise SystemExit(f"MAIL_TRANSPORT must be gmail_api or smtp, not {v!r}")
+    return v
 
 
 class Api:

@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 const BASE = process.env.BASE || "http://127.0.0.1:8787";
 const TOKEN = process.env.API_TOKEN || "local-test-token-0123456789";
 const BASIC = "Basic " + Buffer.from("admin:secret").toString("base64");
-const P = "participate@survo.tech", R = "research@survo.tech";
+const P = "participate@survo.tech", R = "research@survo.tech", S = "survey@survo.tech";
 
 const api = async (path, opts = {}) => {
   const res = await fetch(BASE + path, { ...opts, redirect: "manual", headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json", ...(opts.headers || {}) } });
@@ -83,7 +83,8 @@ test("test mode only ever returns allow-listed test contacts; reservation is ide
   const m = b1.body.messages[0];
   assert.equal(m.survey_link, `https://survo.tech/s/${m.rid}`);
   assert.equal(m.optout_link, `https://survo.tech/optout/${m.rid}`);
-  const r = await events([{ rid: m.rid, email: m.email, type: "sent", kind: "invite", mailbox: P, meta: { message_id: "<ibls.x@survo.tech>" }, id: "sent:test1" }]);
+  // The seed send happens on Monday 26 Oct: it moves participate@ out of warm-up stage 0 (seed-test day).
+  const r = await events([{ rid: m.rid, email: m.email, type: "sent", kind: "invite", mailbox: P, ts: "2026-10-26T05:00:00Z", meta: { message_id: "<ibls.x@survo.tech>" }, id: "sent:test1" }]);
   assert.equal(r.body.accepted, 1);
   const dup = await events([{ rid: m.rid, type: "sent", kind: "invite", mailbox: P, id: "sent:test1" }]);
   assert.equal(dup.body.duplicate, 1);
@@ -103,25 +104,34 @@ test("live mode: window, start date, ramp pacing, blackout", async () => {
   assert.match(before.body.reason, /before start_date/);
   const early = await batch(P, "2026-10-27T04:00:00Z", "l1"); // 09:30 IST
   assert.match(early.body.reason, /outside send window/);
-  // 10:05 IST on day 1: cap 40, pacing allows ceil(40*35/420)=4
+  // 10:05 IST on day 1: warm-up stage 1 (cap 20, the seed day was Monday), pacing allows ceil(20*35/420)=2
   const d1 = await batch(P, "2026-10-27T04:35:00Z", "l2");
-  assert.equal(d1.body.caps.daily_cap, 40);
-  assert.equal(d1.body.messages.length, 4, JSON.stringify(d1.body.caps));
+  assert.equal(d1.body.caps.stage, 1, JSON.stringify(d1.body.caps));
+  assert.equal(d1.body.caps.daily_cap, 20);
+  assert.equal(d1.body.caps.warmup_last.action, "advance");
+  assert.equal(d1.body.messages.length, 2, JSON.stringify(d1.body.caps));
   assert.ok(d1.body.messages.every((m) => m.kind === "invite" && !m.rid.startsWith("TEST") && m.mailbox === P));
   const orders = d1.body.messages.map((m) => m.rid);
   // record them as sent on day 1
   await events(d1.body.messages.map((m, i) => ({ rid: m.rid, type: "sent", kind: "invite", mailbox: P, ts: "2026-10-27T04:4" + i + ":00Z", id: "s1:" + m.rid })));
-  // late on day 1 (16:50 IST): pacing allows the full 40 minus 4 sent, but per_run_max 20 and max param 50
+  // late on day 1 (16:50 IST): pacing allows the full 20 minus 2 sent
   const late = await batch(P, "2026-10-27T11:20:00Z", "l3");
-  assert.equal(late.body.caps.sent_today, 4);
-  assert.equal(late.body.messages.length, 20);
+  assert.equal(late.body.caps.sent_today, 2);
+  assert.equal(late.body.messages.length, 18);
   assert.ok(!late.body.messages.some((m) => orders.includes(m.rid)));
   await events(late.body.messages.map((m) => ({ rid: m.rid, type: "sent", kind: "invite", mailbox: P, ts: "2026-10-27T11:21:00Z", id: "s2:" + m.rid })));
   liveSent.push(...late.body.messages.map((m) => m.rid));
-  // day 2 uses ramp step 2 (70)
+  // day 2: 20 clean sends on a weekday -> stage 2 (40/day)
   const d2 = await batch(P, "2026-10-28T10:00:00Z", "l4");
-  assert.equal(d2.body.caps.send_day, 2);
-  assert.equal(d2.body.caps.daily_cap, 70);
+  assert.equal(d2.body.caps.stage, 2);
+  assert.equal(d2.body.caps.daily_cap, 40);
+  // research@ never sent a seed: in live mode it stays at stage 0 and sends nothing real
+  // research@ has not had its seed day yet: in live mode it may only send its own seed contact (TEST0002)
+  const rs = await batch(R, "2026-10-28T10:00:00Z", "l4r");
+  assert.equal(rs.body.caps.stage, 0);
+  assert.equal(rs.body.caps.daily_cap, 5);
+  assert.deepEqual(rs.body.messages.map((m) => m.rid), ["TEST0002"]);
+  await api("/api/release", { method: "POST", body: JSON.stringify({ run_id: rs.body.run_id }) });
   await api("/api/release", { method: "POST", body: JSON.stringify({ run_id: d2.body.run_id }) });
   const diwali = await batch(P, "2026-11-06T06:00:00Z", "l5");
   assert.match(diwali.body.reason, /blackout/);
@@ -130,7 +140,7 @@ test("live mode: window, start date, ramp pacing, blackout", async () => {
 });
 
 test("reminders come first, 5 workdays later, and skip completed/opted-out", async () => {
-  // Contacts invited on 27 Oct (24 of them in participate@). On Mon 2 Nov (4 workdays) none are due.
+  // Contacts invited on 27 Oct (20 of them, all from participate@). On Mon 2 Nov (4 workdays) none are due.
   const mon = await batch(P, "2026-11-02T10:00:00Z", "r0", 50);
   assert.ok(mon.body.messages.every((m) => m.kind === "invite"));
   await api("/api/release", { method: "POST", body: JSON.stringify({ run_id: mon.body.run_id }) });
@@ -140,7 +150,8 @@ test("reminders come first, 5 workdays later, and skip completed/opted-out", asy
   assert.equal(first.kind, "reminder");
   await api("/api/release", { method: "POST", body: JSON.stringify({ run_id: s.body.run_id }) });
   const invited = (await dash("batches")).body.rows.find((r) => r.day === "2026-10-27");
-  assert.equal(invited.invited, 24);
+  assert.equal(invited.invited, 20);
+  assert.equal(invited.by_mailbox[P], 20);
   const cands = (await dash("search?q=" + first.rid)).body.rows;
   assert.equal(cands.length, 1);
   await events([
@@ -151,7 +162,8 @@ test("reminders come first, 5 workdays later, and skip completed/opted-out", asy
   assert.equal((await contact(first.rid)).status, "completed");
   const tue = await batch(P, "2026-11-03T10:00:00Z", "r1", 50);
   const kinds = tue.body.messages.map((m) => m.kind);
-  assert.equal(kinds.filter((k) => k === "reminder").length, 20); // per_run_max 20; 23 reminders due
+  assert.equal(kinds.filter((k) => k === "reminder").length, 19); // 19 due (one completed); per_run_max 20 leaves room for 1 invite
+  assert.equal(kinds[kinds.length - 1], "invite");
   assert.ok(!tue.body.messages.some((m) => m.rid === first.rid), "completed contact gets no reminder");
   assert.ok(tue.body.messages[0].invite_msgid === null || typeof tue.body.messages[0].invite_msgid === "string");
   await events(tue.body.messages.map((m) => ({ rid: m.rid, type: "sent", kind: m.kind, mailbox: P, ts: "2026-11-03T10:01:00Z", id: "rem:" + m.rid })));
@@ -226,7 +238,7 @@ test("manual pause, contact hold, dashboard data endpoints, CSV export", async (
   const sum = (await dash("summary")).body;
   assert.ok(sum.schedule.projection.finishDate);
   assert.equal(sum.kpis.organic_completed, 1);
-  assert.equal(sum.kpis.invited, 24);
+  assert.equal(sum.kpis.invited, 21);
   const strata = (await dash("strata")).body.rows;
   assert.equal(strata.filter((r) => r.dim === "region").reduce((a, r) => a + r.contacts, 0), 8092);
   const csv = await fetch(BASE + "/dashboard/api/export.csv", { headers: { authorization: BASIC } });
@@ -242,7 +254,8 @@ test("job API: heartbeat, state, summary", async () => {
   const st = await api("/api/state?keys=kobo_last_id,imap:participate@survo.tech");
   assert.deepEqual(st.body.state, { kobo_last_id: "42", "imap:participate@survo.tech": "7:9" });
   const s = await api("/api/summary?day=2026-10-27");
-  assert.equal(s.body.today.invites, 24);
+  assert.equal(s.body.today.invites, 20);
+  assert.equal(s.body.mailboxes.length, 5);
   const quota = await api("/api/job-run", { method: "POST", body: JSON.stringify({ job: "send", ok: false, detail: "quota", quota_mailbox: R }) });
   assert.equal(quota.status, 200);
   const blocked = await batch(R, null, "q1");
@@ -250,17 +263,123 @@ test("job API: heartbeat, state, summary", async () => {
   assert.ok(blocked.body.messages.length === 0);
 });
 
-test("Titan bounce guard stops a mailbox below Titan's limits", async () => {
+test("bounce guard stops one mailbox on a bounce spike", async () => {
   const ok = await batch(R, "2026-11-04T05:30:00Z", "g0", 1);
   assert.ok(!/bounce guard/.test(ok.body.reason || ""), JSON.stringify(ok.body));
   if (ok.body.run_id) await api("/api/release", { method: "POST", body: JSON.stringify({ run_id: ok.body.run_id }) });
   await events([0, 1, 2, 3].map((i) => ({ email: `nobody${i}@bounce.example`, type: "bounced_soft", mailbox: R, ts: "2026-11-04T05:0" + i + ":00Z", id: "guard:" + i })));
   const g = await batch(R, "2026-11-04T05:30:00Z", "g1", 5);
   assert.equal(g.body.messages.length, 0);
-  assert.match(g.body.reason, /Titan bounce guard: research@survo.tech: 4 bounces in the last hour/);
+  assert.match(g.body.reason, /Bounce guard: research@survo.tech: 4 bounces in the last hour/);
   // the other mailbox is unaffected by research@'s hourly count (domain-wide limits are higher)
   const p = await batch(P, "2026-11-04T05:30:00Z", "g2", 1);
   assert.ok(!/bounce guard/.test(p.body.reason || ""));
   const h = (await dash("summary")).body.health.bounce_guard;
   assert.ok(h[R]);
+});
+
+test("BIMI logo is served as image/svg+xml", async () => {
+  const r = await fetch(BASE + "/bimi/logo.svg");
+  assert.equal(r.status, 200);
+  assert.equal(r.headers.get("content-type"), "image/svg+xml");
+  const svg = await r.text();
+  assert.match(svg, /<svg[^>]+baseProfile="tiny-ps"/);
+  const head = await fetch(BASE + "/bimi/logo.svg", { method: "HEAD" });
+  assert.equal(head.headers.get("content-type"), "image/svg+xml");
+});
+
+test("site and opt-out page name the fieldwork contact", async () => {
+  const html = await (await fetch(BASE + "/")).text();
+  assert.match(html, /Bishnu Datta Behuria/);
+  assert.match(html, /bishnu@morselindia\.org/);
+  const o = await (await fetch(BASE + "/optout/ZZZZ9999")).text();
+  assert.match(o, /bishnu@morselindia\.org/);
+});
+
+function parseCsv(text) {
+  const rows = []; let row = [], cell = "", q = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (q) { if (ch === '"') { if (text[i + 1] === '"') { cell += '"'; i++; } else q = false; } else cell += ch; }
+    else if (ch === '"') q = true;
+    else if (ch === ",") { row.push(cell); cell = ""; }
+    else if (ch === "\n") { row.push(cell.replace(/\r$/, "")); rows.push(row); row = []; cell = ""; }
+    else cell += ch;
+  }
+  return rows;
+}
+
+test("per-mailbox warm-up: seed stage, advance, hold, step back; caps never above 450", async () => {
+  // Settings cannot raise any mailbox above 450/day.
+  assert.equal((await dash("settings", { method: "POST", body: JSON.stringify({ warmup_caps: "20,40,500" }) })).status, 400);
+  assert.equal((await dash("settings", { method: "POST", body: JSON.stringify({ cap_max: "451" }) })).status, 400);
+  assert.equal((await dash("settings", { method: "POST", body: JSON.stringify({ reply_to: "someone@gmail.com" }) })).status, 400);
+  assert.equal((await dash("settings", { method: "POST", body: JSON.stringify({ reply_to: "team@survo.tech" }) })).status, 200);
+  assert.equal((await api("/api/settings")).body.settings.reply_to, "team@survo.tech");
+  await dash("settings", { method: "POST", body: JSON.stringify({ reply_to: "research@survo.tech" }) });
+
+  // survey@ starts at stage 0: in live mode it may only send seeds, and has none.
+  const s0 = await batch(S, "2026-11-12T05:30:00Z", "w0");
+  assert.equal(s0.body.messages.length, 0);
+  assert.match(s0.body.reason, /stage 0/);
+  // Researcher skips the seed day from the dashboard.
+  assert.equal((await dash("warmup", { method: "POST", body: JSON.stringify({ mailbox: S, stage: 9999 }) })).status, 400);
+  assert.equal((await dash("warmup", { method: "POST", body: JSON.stringify({ mailbox: S, stage: 1, note: "seed checked by hand" }) })).body.stage, 1);
+  const s1 = await batch(S, "2026-11-12T11:20:00Z", "w1");
+  assert.equal(s1.body.caps.stage, 1);
+  assert.equal(s1.body.caps.daily_cap, 20);
+  assert.ok(s1.body.messages.length > 0 && s1.body.messages.every((m) => m.kind === "invite" && m.mailbox === S), "shared queue serves survey@");
+  await api("/api/release", { method: "POST", body: JSON.stringify({ run_id: s1.body.run_id }) });
+
+  const csv = parseCsv(await (await fetch(BASE + "/dashboard/api/export.csv", { headers: { authorization: BASIC } })).text());
+  const hdr = csv[0].map((h) => h.replace(/^\ufeff/, ""));
+  const ri = hdr.indexOf("rid"), si = hdr.indexOf("status"), ti = hdr.indexOf("is_test");
+  const pool = csv.slice(1).filter((r) => r[si] === "queued" && r[ti] === "0").map((r) => r[ri]).slice(-120);
+  assert.equal(pool.length, 120);
+  const sent = (rids, day, tag) => events(rids.map((rid, i) => ({ rid, type: "sent", kind: "invite", mailbox: S, ts: `${day}T0${5 + (i % 4)}:${String(i % 60).padStart(2, "0")}:00Z`, id: `${tag}:${rid}` })));
+  const bounce = (rids, day, tag) => events(rids.map((rid, i) => ({ rid, type: "bounced_hard", mailbox: S, ts: `${day}T10:0${i}:00Z`, id: `${tag}:${rid}`, meta: { status: "5.1.1" } })));
+
+  // Thu 12 Nov: 20 clean sends -> Fri 13 Nov stage 2 (40/day).
+  await sent(pool.slice(0, 20), "2026-11-12", "w12");
+  const fri = await batch(S, "2026-11-13T05:30:00Z", "w2", 1);
+  assert.equal(fri.body.caps.stage, 2, JSON.stringify(fri.body.caps));
+  assert.equal(fri.body.caps.daily_cap, 40);
+  assert.equal(fri.body.caps.warmup_last.action, "advance");
+  await api("/api/release", { method: "POST", body: JSON.stringify({ run_id: fri.body.run_id }) });
+
+  // Fri 13 Nov: 40 sends, 2 hard bounces -> window (12+13 Nov) 2/60 = 3.3% -> hold at stage 2.
+  await sent(pool.slice(20, 60), "2026-11-13", "w13");
+  await bounce(pool.slice(20, 22), "2026-11-13", "b13");
+  // Saturday: window closed, the stage does not move.
+  assert.match((await batch(S, "2026-11-14T05:30:00Z", "w3")).body.reason, /weekday/);
+  const mon = await batch(S, "2026-11-16T05:30:00Z", "w4", 1);
+  assert.equal(mon.body.caps.stage, 2, JSON.stringify(mon.body.caps));
+  assert.equal(mon.body.caps.warmup_last.action, "hold");
+  assert.equal(mon.body.caps.warmup_last.sends, 60);
+  assert.equal(mon.body.caps.warmup_last.hard, 2);
+  await api("/api/release", { method: "POST", body: JSON.stringify({ run_id: mon.body.run_id }) });
+
+  // Mon 16 Nov: 40 sends, 2 more bounces -> window (12, 13, 16 Nov) 4/100 = 4% -> step back to stage 1.
+  await sent(pool.slice(60, 100), "2026-11-16", "w16");
+  await bounce(pool.slice(60, 62), "2026-11-16", "b16");
+  const tue = await batch(S, "2026-11-17T05:30:00Z", "w5", 1);
+  assert.ok(tue.body.caps, JSON.stringify(tue.body));
+  assert.equal(tue.body.caps.stage, 1, JSON.stringify(tue.body.caps));
+  assert.equal(tue.body.caps.warmup_last.action, "stepback");
+  assert.equal(tue.body.caps.daily_cap, 20);
+  await api("/api/release", { method: "POST", body: JSON.stringify({ run_id: tue.body.run_id }) });
+
+  // Per-mailbox status: job API and dashboard.
+  const mbs = (await api("/api/mailboxes")).body.mailboxes;
+  assert.deepEqual(mbs.map((m) => m.mailbox), [P, R, S, "study@survo.tech", "team@survo.tech"]);
+  const sv = mbs.find((m) => m.mailbox === S);
+  assert.equal(sv.stage, 1);
+  assert.equal(sv.daily_cap, 20);
+  assert.ok("sent_today" in sv && "stage_label" in sv);
+  assert.equal(sv.history[0].action, "stepback");
+  const dm = (await dash("mailboxes")).body;
+  assert.equal(dm.hard_max, 450);
+  const sched = (await dash("summary")).body.schedule;
+  assert.equal(sched.mailboxes.length, 5);
+  assert.ok(sched.mailboxes.every((m) => "stage" in m && "daily_cap" in m && "sent_today" in m));
 });

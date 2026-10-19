@@ -17,7 +17,7 @@ routes = [
 directory = "./site"
 binding = "ASSETS"
 not_found_handling = "none"
-run_worker_first = ["/s/*", "/optout/*", "/dashboard", "/dashboard/*", "/api/*"]
+run_worker_first = ["/s/*", "/optout/*", "/dashboard", "/dashboard/*", "/api/*", "/bimi/*"]
 
 [[d1_databases]]
 binding = "DB"
@@ -39,6 +39,8 @@ crons = ["*/15 * * * *"]
 [vars]
 SITE_ORIGIN = "https://survo.tech"
 KOBO_FORM_URL = "https://ee.kobotoolbox.org/jbh8Urj6"
+# Google Workspace sending mailboxes (must match the MAILBOXES list the GitHub Actions jobs use).
+MAILBOXES = "participate@survo.tech,research@survo.tech,survey@survo.tech,study@survo.tech,team@survo.tech"
 # Cloudflare Access (Zero Trust) for /dashboard. Fill in after creating the Access app.
 # ACCESS_TEAM_DOMAIN example: "morsel.cloudflareaccess.com"; ACCESS_AUD = the app's AUD tag.
 ACCESS_TEAM_DOMAIN = ""

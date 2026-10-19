@@ -21,8 +21,8 @@ export interface ScheduleConfig {
   windowEnd: number;            // minutes after IST midnight, e.g. 1020 = 17:00
   weekdays: number[];           // ISO weekdays allowed, 1 = Mon … 7 = Sun
   blackout: Set<string>;        // YYYY-MM-DD dates with no sending
-  ramp: number[];               // per-mailbox daily cap for send-day 1, 2, 3, … (last value repeats)
-  capMax: number;               // hard ceiling on the per-mailbox daily cap
+  warmupCaps: number[];         // per-mailbox daily cap at warm-up stage 1, 2, 3, … (last value repeats)
+  capMax: number;               // ceiling on the per-mailbox daily cap (never above DAILY_HARD_MAX)
   hourlyCap: number;            // per-mailbox cap over any rolling 60 minutes
   reminderAfterWorkdays: number;
   reminder2Enabled: boolean;
@@ -120,10 +120,81 @@ export function reminderCutoffDate(today: string, n: number, cfg: Pick<ScheduleC
   return workdaysBefore(today, n, cfg);
 }
 
-/** Per-mailbox daily cap on the k-th send day (k starts at 1). */
+/**
+ * Absolute per-mailbox daily ceiling. Google Workspace trial accounts may send 500 messages a day per
+ * user; this leaves headroom for researchers' own replies and the daily report. No setting can raise it.
+ */
+export const DAILY_HARD_MAX = 450;
+
+/** Per-mailbox daily cap at warm-up stage k (k starts at 1; the last value repeats). */
 export function rampCap(k: number, ramp: number[], capMax: number): number {
   const v = ramp[Math.min(Math.max(k, 1), ramp.length) - 1];
-  return Math.max(0, Math.min(v, capMax));
+  return Math.max(0, Math.min(v, capMax, DAILY_HARD_MAX));
+}
+
+// ---------------------------------------------------------------------------------------------
+// Per-mailbox warm-up
+//   stage 0  = seed-test day: the mailbox may only send to the seeded test contacts (test_recipients)
+//   stage k  = warmup_caps[k-1] per day (default 20,40,60,100,150,200,250)
+// The stage is re-evaluated once per IST day from the mailbox's last weekday with sends.
+// ---------------------------------------------------------------------------------------------
+
+export interface WarmupConfig {
+  caps: number[];              // stage 1.. caps
+  seedCap: number;             // max seed (test) messages per mailbox on the seed-test day
+  maxBounceRate: number;       // advance only if the window hard-bounce rate is below this (0.02)
+  stepbackBounceRate: number;  // step back one stage at or above this rate (0.04)
+  windowDays: number;          // the "last window" = the mailbox's last N send days
+  capMax: number;              // settings cap_max (clamped to DAILY_HARD_MAX)
+}
+
+export function warmupConfigFromSettings(s: Record<string, string>): WarmupConfig {
+  return {
+    caps: parseRamp(s.warmup_caps || "20,40,60,100,150,200,250").map((n) => Math.min(n, DAILY_HARD_MAX)),
+    seedCap: Math.max(0, Math.min(num(s.warmup_seed_cap, 5), 50)),
+    maxBounceRate: num(s.warmup_max_bounce_rate, 0.02),
+    stepbackBounceRate: num(s.warmup_stepback_bounce_rate, 0.04),
+    windowDays: Math.max(1, Math.min(num(s.warmup_window_days, 3), 30)),
+    capMax: Math.min(num(s.cap_max, DAILY_HARD_MAX), DAILY_HARD_MAX),
+  };
+}
+
+/** Highest stage number (stage = caps.length is the plateau). */
+export function maxStage(wc: WarmupConfig): number {
+  return Math.max(1, wc.caps.length);
+}
+
+/** Daily cap for a mailbox at `stage` (stage 0 = seed-test day: only seed messages). */
+export function stageCap(stage: number, wc: WarmupConfig): number {
+  if (stage <= 0) return Math.max(0, Math.min(wc.seedCap, wc.capMax, DAILY_HARD_MAX));
+  return rampCap(Math.min(stage, maxStage(wc)), wc.caps, wc.capMax);
+}
+
+export type WarmupAction = "advance" | "hold" | "stepback" | "at_max";
+
+export interface WarmupWindow { sends: number; hard: number; complaints: number }
+
+/**
+ * Decide the next stage after a weekday on which the mailbox actually sent.
+ *   complaints > 0 or rate >= stepbackBounceRate -> step back one stage (never below stage 1)
+ *   rate >= maxBounceRate                        -> hold
+ *   otherwise                                    -> advance one stage (or stay at the plateau)
+ */
+export function decideWarmup(stage: number, w: WarmupWindow, wc: WarmupConfig): { stage: number; action: WarmupAction; rate: number; reason: string } {
+  const rate = w.sends > 0 ? w.hard / w.sends : 0;
+  const pct = (x: number) => (x * 100).toFixed(1) + "%";
+  if (w.sends <= 0) return { stage, action: "hold", rate, reason: "no sends in the window" };
+  if (w.complaints > 0) {
+    const next = stage >= 2 ? stage - 1 : stage;
+    return { stage: next, action: next < stage ? "stepback" : "hold", rate, reason: `${w.complaints} complaint(s) in the last window` };
+  }
+  if (rate >= wc.stepbackBounceRate) {
+    const next = stage >= 2 ? stage - 1 : stage;
+    return { stage: next, action: next < stage ? "stepback" : "hold", rate, reason: `hard-bounce rate ${pct(rate)} >= ${pct(wc.stepbackBounceRate)}` };
+  }
+  if (rate >= wc.maxBounceRate) return { stage, action: "hold", rate, reason: `hard-bounce rate ${pct(rate)} >= ${pct(wc.maxBounceRate)}` };
+  if (stage >= maxStage(wc)) return { stage, action: "at_max", rate, reason: `hard-bounce rate ${pct(rate)}, at the top stage` };
+  return { stage: stage + 1, action: "advance", rate, reason: `hard-bounce rate ${pct(rate)} < ${pct(wc.maxBounceRate)}, no complaints` };
 }
 
 export interface WindowState { open: boolean; minutesInto: number; windowMinutes: number; reason?: string }
@@ -164,6 +235,7 @@ export function remainingCapacity(args: {
 export interface MailboxProjectionInput {
   mailbox: string;
   sendDaysUsed: number;          // distinct IST days this mailbox already sent on (before today)
+  stage?: number;                // current warm-up stage (if given, used instead of sendDaysUsed)
   sentToday: number;             // sends already made today
   queued: number;                // invites not yet sent
   pendingReminders: Record<string, number>;   // invite IST date -> contacts still awaiting reminder 1
@@ -182,10 +254,13 @@ export interface ProjectionResult {
  * Day-by-day simulation of the remaining work at the configured caps.
  * `remindRate` = share of invitees still needing a reminder (not completed/bounced/opted out).
  */
-export function projectSchedule(now: Date, cfg: ScheduleConfig, boxes: MailboxProjectionInput[], remindRate = 0.9): ProjectionResult {
+export function projectSchedule(now: Date, cfg: ScheduleConfig, boxes: MailboxProjectionInput[], remindRate = 0.9, sharedQueued?: number): ProjectionResult {
   const p = istParts(now);
+  // With a shared invite queue (sharedQueued given), invites are drawn from one pool by whichever mailbox has room.
+  let pool = sharedQueued ?? 0;
+  const shared = sharedQueued !== undefined;
   const state = boxes.map((b) => ({
-    k: b.sendDaysUsed,
+    k: b.stage !== undefined ? b.stage - 1 : b.sendDaysUsed,
     queued: b.queued,
     rem1: { ...b.pendingReminders } as Record<string, number>,
     rem2: { ...(b.pendingReminders2 || {}) } as Record<string, number>,
@@ -199,7 +274,7 @@ export function projectSchedule(now: Date, cfg: ScheduleConfig, boxes: MailboxPr
   // Today only counts if the window has not closed yet.
   const todayUsable = p.minutes < cfg.windowEnd;
   if (!todayUsable) d = addDays(d, 1);
-  const pendingTotal = () => state.reduce((a, s) => a + s.queued + sum(s.rem1) + (cfg.reminder2Enabled ? sum(s.rem2) : 0), 0);
+  const pendingTotal = () => (shared ? pool : 0) + state.reduce((a, s) => a + (shared ? 0 : s.queued) + sum(s.rem1) + (cfg.reminder2Enabled ? sum(s.rem2) : 0), 0);
   let guard = 0;
   while (pendingTotal() > 0.5 && guard++ < 730) {
     if (isSendDay(d, cfg)) {
@@ -209,7 +284,8 @@ export function projectSchedule(now: Date, cfg: ScheduleConfig, boxes: MailboxPr
       for (const s of state) {
         const isToday = d === p.date;
         const k = s.k + 1; // sendDaysUsed counts days before today
-        const cap = Math.max(0, rampCap(k, cfg.ramp, cfg.capMax) - (isToday ? s.sentToday : 0));
+        // k <= 0 is the seed-test day: no real sends, the mailbox moves to stage 1 afterwards.
+        const cap = k <= 0 ? 0 : Math.max(0, rampCap(k, cfg.warmupCaps, cfg.capMax) - (isToday ? s.sentToday : 0));
         let used = 0;
         // reminders first
         for (const [bucket, cut, next] of [[s.rem1, cut1, true], [s.rem2, cut2, false]] as [Record<string, number>, string, boolean][]) {
@@ -222,9 +298,12 @@ export function projectSchedule(now: Date, cfg: ScheduleConfig, boxes: MailboxPr
             if (next && cfg.reminder2Enabled) s.rem2[d] = (s.rem2[d] || 0) + take * remindRate;
           }
         }
-        const inv = Math.min(s.queued, Math.max(0, cap - used));
-        if (inv > 0) { s.queued -= inv; s.rem1[d] = (s.rem1[d] || 0) + inv * remindRate; used += inv; dayInv += inv; }
-        if (used > 0 || isToday) s.k = k;
+        const inv = Math.min(shared ? pool : s.queued, Math.max(0, cap - used));
+        if (inv > 0) {
+          if (shared) pool -= inv; else s.queued -= inv;
+          s.rem1[d] = (s.rem1[d] || 0) + inv * remindRate; used += inv; dayInv += inv;
+        }
+        if (used > 0 || isToday || k <= 0) s.k = k;
       }
       if (dayInv + dayRem > 0) {
         sendDays++;
@@ -252,8 +331,8 @@ export function configFromSettings(s: Record<string, string>): ScheduleConfig {
     windowEnd: parseHHMM(s.window_end, 1020),
     weekdays: String(s.send_weekdays || "1,2,3,4,5").split(/[\s,]+/).map(Number).filter((n) => n >= 1 && n <= 7),
     blackout: parseBlackout(s.blackout_dates || ""),
-    ramp: parseRamp(s.ramp || "40,70,110,160,220,300"),
-    capMax: num(s.cap_max, 300),
+    warmupCaps: parseRamp(s.warmup_caps || "20,40,60,100,150,200,250"),
+    capMax: Math.min(num(s.cap_max, DAILY_HARD_MAX), DAILY_HARD_MAX),
     hourlyCap: num(s.hourly_cap, 120),
     reminderAfterWorkdays: num(s.reminder_after_workdays, 5),
     reminder2Enabled: s.reminder2_enabled === "true",

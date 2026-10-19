@@ -2,8 +2,10 @@
 import { checkBearer } from "./auth";
 import { bounceGuard, getSettings, getState, ingestEvents, IncomingEvent, logJobRun, setState, testRecipients } from "./db";
 import {
-  addDays, configFromSettings, istMidnightUtc, istParts, rampCap, reminderCutoffDate, remainingCapacity, windowState, isoOf,
+  addDays, configFromSettings, DAILY_HARD_MAX, istMidnightUtc, istParts, reminderCutoffDate, remainingCapacity, stageCap, windowState, isoOf,
+  warmupConfigFromSettings,
 } from "./schedule";
+import { evaluateWarmup, stageLabel, warmupView } from "./warmup";
 import { kpis, rollupDay, todayIst } from "./stats";
 import { Env, json, mailboxes, nowIso, randomId } from "./util";
 
@@ -20,6 +22,7 @@ export async function handleApi(req: Request, env: Env, url: URL): Promise<Respo
       return json({ settings: s, now: nowIso(), today_ist: todayIst(), window: windowState(new Date(), cfg), mailboxes: mailboxes(env) });
     }
     if (path === "/api/next-batch" && req.method === "GET") return json(await nextBatch(env, url));
+    if (path === "/api/mailboxes" && req.method === "GET") return json({ today_ist: todayIst(), mailboxes: await mailboxStatus(env) });
     if (path === "/api/events" && req.method === "POST") {
       const body = (await req.json()) as { events?: IncomingEvent[] } | IncomingEvent[];
       const events = Array.isArray(body) ? body : body.events || [];
@@ -55,7 +58,8 @@ export async function handleApi(req: Request, env: Env, url: URL): Promise<Respo
       const s = await getSettings(db);
       const [today, totals] = await Promise.all([rollupDay(db, day), kpis(db)]);
       const lastRuns = await db.prepare("SELECT job, ts, ok, detail FROM job_runs WHERE id IN (SELECT MAX(id) FROM job_runs GROUP BY job)").all();
-      return json({ day, today, totals, paused: s.paused === "true", pause_reason: s.pause_reason, test_mode: s.test_mode === "true", jobs: lastRuns.results });
+      return json({ day, today, totals, paused: s.paused === "true", pause_reason: s.pause_reason, test_mode: s.test_mode === "true", jobs: lastRuns.results,
+        mailboxes: await mailboxStatus(env) });
     }
     return json({ error: "not found" }, 404);
   } catch (e) {
@@ -69,9 +73,13 @@ interface Msg {
 }
 
 /**
- * Due messages for one mailbox: reminders first, then new invites in stratified send_order,
- * limited by daily ramp cap, hourly cap, even pacing, per-run max and the caller's max.
- * Idempotent per run_id: a repeated call with the same run_id returns the same reservation.
+ * Due messages for one mailbox: reminders first (always from the mailbox that sent the invite), then new
+ * invites from the SHARED queue in stratified send_order, so the five mailboxes rotate over one queue and a
+ * mailbox that is held back by its warm-up never strands contacts. Limited by the mailbox's warm-up cap
+ * (never above DAILY_HARD_MAX), hourly cap, even pacing, per-run max and the caller's max.
+ * Seeded test contacts stay tied to the mailbox seed_test.py gave them, so every mailbox gets its own seed test.
+ * Reservation is one UPDATE … WHERE rid IN (SELECT … LIMIT n) per kind, so concurrent mailboxes cannot
+ * double-book a contact. Idempotent per run_id: a repeated call with the same run_id returns the same reservation.
  */
 export async function nextBatch(env: Env, url: URL) {
   const db = env.DB;
@@ -87,7 +95,7 @@ export async function nextBatch(env: Env, url: URL) {
   const cfg = configFromSettings(s);
   const testMode = s.test_mode === "true";
   const allow = testRecipients(s);
-  const settingsOut = { postal_address: s.postal_address, from_name: s.from_name, test_mode: testMode, test_recipients: allow };
+  const settingsOut = { postal_address: s.postal_address, from_name: s.from_name, reply_to: s.reply_to, test_mode: testMode, test_recipients: allow };
 
   // 1. Idempotency: same run asking again gets the same reservation.
   const existing = await reservedFor(db, runId, nowS, env);
@@ -100,64 +108,81 @@ export async function nextBatch(env: Env, url: URL) {
   if (testMode && !allow.length) return { messages: [], reason: "test_mode is on and test_recipients is empty", settings: settingsOut };
   const today = istParts(now).date;
   const qb = await getState(db, ["quota_block:" + mailbox]);
-  if (qb["quota_block:" + mailbox] === today) return { messages: [], reason: `${mailbox} hit an SMTP quota today; resumes tomorrow`, settings: settingsOut };
+  if (qb["quota_block:" + mailbox] === today) return { messages: [], reason: `${mailbox} hit its sending quota today; resumes tomorrow`, settings: settingsOut };
   const guard = await bounceGuard(db, s, mailbox, now);
   if (guard.blocked) return { messages: [], reason: guard.reason, bounce_guard: guard.counts, settings: settingsOut };
 
-  // 3. Capacity.
+  // 3. Warm-up stage and capacity.
+  const wc = warmupConfigFromSettings(s);
+  const wu = await evaluateWarmup(db, s, mailbox, now, true);
+  const seedOnly = !testMode && wu.stage === 0;
+  if (seedOnly && !allow.length) {
+    return { messages: [], reason: `${mailbox} is at warm-up stage 0 (seed test) and test_recipients is empty: run make seed-test, or set the stage on the dashboard`, warmup: { stage: 0 }, settings: settingsOut };
+  }
+  // In test mode the seed cap is the minimum, so a test run works whatever the stage.
+  const dailyCap = testMode ? Math.max(stageCap(wu.stage, wc), stageCap(0, wc)) : stageCap(wu.stage, wc);
   const dayStart = istMidnightUtc(today);
   const hourAgo = isoOf(new Date(now.getTime() - 3600_000));
   const counts = await db.prepare(`SELECT
-      (SELECT COUNT(DISTINCT substr(datetime(ts, '+330 minutes'), 1, 10)) FROM events
-         WHERE type = 'sent' AND mailbox = ?1 AND test = 0 AND ts < ?2) AS days_used,
       (SELECT COUNT(*) FROM events WHERE mailbox = ?1 AND ts >= ?2 AND (type = 'sent' OR (type = 'bounced_hard' AND kind = 'smtp'))) AS sent_today,
       (SELECT COUNT(*) FROM events WHERE mailbox = ?1 AND ts >= ?3 AND (type = 'sent' OR (type = 'bounced_hard' AND kind = 'smtp'))) AS sent_hour,
-      (SELECT COUNT(*) FROM contacts WHERE mailbox = ?1 AND reserved_until > ?4) AS reserved`)
-    .bind(mailbox, dayStart, hourAgo, nowS).first<{ days_used: number; sent_today: number; sent_hour: number; reserved: number }>();
-  const k = (counts?.days_used || 0) + 1;
-  const dailyCap = rampCap(k, cfg.ramp, cfg.capMax);
+      (SELECT COUNT(*) FROM contacts WHERE reserved_until > ?4 AND mailbox = ?1) AS reserved`)
+    .bind(mailbox, dayStart, hourAgo, nowS).first<{ sent_today: number; sent_hour: number; reserved: number }>();
   const room = remainingCapacity({
     dailyCap, sentToday: counts?.sent_today || 0, sentLastHour: counts?.sent_hour || 0, reservedActive: counts?.reserved || 0,
-    hourlyCap: cfg.hourlyCap, perRunMax: Number(s.per_run_max) || 20, requested,
-    pace: !testMode && s.pace_evenly === "true" && win.open ? { minutesInto: win.minutesInto, windowMinutes: win.windowMinutes } : null,
+    hourlyCap: Math.min(cfg.hourlyCap, DAILY_HARD_MAX), perRunMax: Number(s.per_run_max) || 20, requested,
+    pace: !testMode && !seedOnly && s.pace_evenly === "true" && win.open ? { minutesInto: win.minutesInto, windowMinutes: win.windowMinutes } : null,
   });
-  const capInfo = { send_day: k, daily_cap: dailyCap, sent_today: counts?.sent_today || 0, sent_last_hour: counts?.sent_hour || 0, reserved: counts?.reserved || 0, room };
+  const capInfo = {
+    stage: wu.stage, stage_label: stageLabel(wu.stage, stageCap(wu.stage, wc)), daily_cap: dailyCap, sent_today: counts?.sent_today || 0,
+    sent_last_hour: counts?.sent_hour || 0, reserved: counts?.reserved || 0, room, warmup_last: wu.last || null,
+  };
   if (room <= 0) return { messages: [], reason: "cap reached for now", caps: capInfo, settings: settingsOut };
 
-  // 4. Candidate selection (reminders first).
-  // ?1 mailbox, ?2 now, ?3 cutoff, ?4 limit, ?5 test allow-list (JSON) when in test mode.
-  const audience = testMode ? "AND lower(email) IN (SELECT value FROM json_each(?5))" : "AND is_test = 0";
+  // 4. Reserve candidates (reminders first). Every statement binds the same 7 parameters:
+  //    ?1 mailbox, ?2 now, ?3 reminder cutoff, ?4 limit, ?5 allow-list JSON, ?6 reserved_until, ?7 run id.
+  const audience = testMode ? "AND lower(email) IN (SELECT value FROM json_each(?5))"
+    : seedOnly ? "AND is_test = 1 AND lower(email) IN (SELECT value FROM json_each(?5))"
+    : "AND is_test = 0 AND ?5 = ?5";
   const free = "AND (reserved_until IS NULL OR reserved_until < ?2)";
   const eligibleForReminder = `AND completed_at IS NULL AND opted_out_at IS NULL AND complained_at IS NULL
       AND consent_declined_at IS NULL AND COALESCE(bounced,'') <> 'hard'`;
   const cut1 = istMidnightUtc(addDays(reminderCutoffDate(today, cfg.reminderAfterWorkdays, cfg), 1));
   const cut2 = istMidnightUtc(addDays(reminderCutoffDate(today, cfg.reminder2AfterWorkdays, cfg), 1));
-  const picks: { rid: string; kind: Msg["kind"] }[] = [];
-  const allowJson = JSON.stringify(allow);
-  const take = async (sql: string, kind: Msg["kind"], extra: string) => {
-    const left = room - picks.length;
-    if (left <= 0) return;
-    const { results } = await db.prepare(sql.replace("{AUD}", audience).replace("{FREE}", free).replace("{ELIG}", eligibleForReminder))
-      .bind(...(testMode ? [mailbox, nowS, extra, left, allowJson] : [mailbox, nowS, extra, left])).all<{ rid: string }>();
-    for (const r of results) picks.push({ rid: r.rid, kind });
-  };
-  await take(`SELECT rid FROM contacts WHERE mailbox = ?1 AND status = 'invited' AND reminder_count = 0 AND invited_at < ?3
-      {ELIG} {FREE} {AUD} ORDER BY invited_at, send_order LIMIT ?4`, "reminder", cut1);
-  if (cfg.reminder2Enabled) {
-    await take(`SELECT rid FROM contacts WHERE mailbox = ?1 AND status = 'reminded' AND reminder_count = 1 AND reminded_at < ?3
-        {ELIG} {FREE} {AUD} ORDER BY reminded_at, send_order LIMIT ?4`, "reminder2", cut2);
-  }
-  // (?3 is unused for invites but must appear so the bound-parameter count matches.)
-  await take(`SELECT rid FROM contacts WHERE mailbox = ?1 AND status = 'queued' AND ?3 = ?3
-      {FREE} {AUD} ORDER BY send_order, rid LIMIT ?4`, "invite", "x");
-  if (!picks.length) return { messages: [], reason: "nothing due", caps: capInfo, settings: settingsOut };
-
-  // 5. Reserve (only rows still free, so concurrent callers cannot double-book).
   const until = isoOf(new Date(now.getTime() + RESERVATION_MINUTES * 60000));
-  await db.batch(picks.map((p) => db.prepare(`UPDATE contacts SET reserved_until = ?, reserved_run = ?, reserved_kind = ?
-      WHERE rid = ? AND (reserved_until IS NULL OR reserved_until < ?)`).bind(until, runId, p.kind, p.rid, nowS)));
+  const allowJson = JSON.stringify(allow);
+  let taken = 0;
+  const take = async (kind: Msg["kind"], where: string, order: string, extra: string, assignMailbox: boolean) => {
+    const left = room - taken;
+    if (left <= 0) return;
+    const sql = `UPDATE contacts SET reserved_until = ?6, reserved_run = ?7, reserved_kind = '${kind}'${assignMailbox ? ", mailbox = ?1" : ""}
+        WHERE rid IN (SELECT rid FROM contacts WHERE ${where} ${free} ${audience} ${eligibleForReminderIf(kind, eligibleForReminder)}
+                      ORDER BY ${order} LIMIT ?4)
+          AND (reserved_until IS NULL OR reserved_until < ?2)`;
+    const r = await db.prepare(sql).bind(mailbox, nowS, extra, left, allowJson, until, runId).run();
+    taken += r.meta.changes ?? 0;
+  };
+  await take("reminder", "mailbox = ?1 AND status = 'invited' AND reminder_count = 0 AND invited_at < ?3", "invited_at, send_order", cut1, false);
+  if (cfg.reminder2Enabled) {
+    await take("reminder2", "mailbox = ?1 AND status = 'reminded' AND reminder_count = 1 AND reminded_at < ?3", "reminded_at, send_order", cut2, false);
+  }
+  // Invites: shared queue for real contacts; seeded test contacts only from their own mailbox. (?3 unused here.)
+  await take("invite", "status = 'queued' AND (is_test = 0 OR mailbox = ?1) AND ?3 = ?3", "send_order, rid", "x", true);
+  if (!taken) return { messages: [], reason: seedOnly ? `${mailbox} is at warm-up stage 0 (seed test): no seed contacts left; run make seed-test, or set the stage on the dashboard` : "nothing due", caps: capInfo, settings: settingsOut };
   const messages = await reservedFor(db, runId, nowS, env);
   return { messages, run_id: runId, reserved_until: until, caps: capInfo, settings: settingsOut };
+}
+
+function eligibleForReminderIf(kind: string, clause: string): string {
+  return kind === "invite" ? "" : clause;
+}
+
+/** Warm-up stage, cap and today's sends for every mailbox (job API and dashboard). */
+export async function mailboxStatus(env: Env, now = new Date(), persist = false) {
+  const s = await getSettings(env.DB);
+  const out = [];
+  for (const mb of mailboxes(env)) out.push(await warmupView(env.DB, s, mb, now, persist));
+  return out;
 }
 
 async function reservedFor(db: D1Database, runId: string, nowS: string, env: Env): Promise<Msg[]> {

@@ -185,8 +185,13 @@ async function loadSummary() {
       <tr><th>Reminder need assumed</th><td>${pct(s.remind_rate_assumed)} of invitees</td></tr>
       <tr><th>Window now</th><td>${s.window.open ? '<span class="ok">open</span>' : esc(s.window.reason || "closed")}</td></tr>
     </tbody></table>
-    <table style="margin-top:8px"><thead><tr><th>Mailbox</th><th class="n">Send days used</th><th class="n">Sent today</th><th class="n">Queued</th><th class="n">Awaiting reminder</th></tr></thead><tbody>
-    ${s.mailboxes.map((m) => `<tr><td>${esc(m.mailbox)}</td><td class="n">${fmt(m.send_days_used)}</td><td class="n">${fmt(m.sent_today)}</td><td class="n">${fmt(m.queued)}</td><td class="n">${fmt(m.awaiting_reminder)}</td></tr>`).join("")}
+    <p class="small muted" style="margin-top:8px">${fmt(s.shared_queue)} invites in the shared queue · hard limit ${fmt(s.hard_max_per_mailbox)}/day per mailbox</p>
+    <table><thead><tr><th>Mailbox</th><th>Warm-up</th><th class="n">Sent today</th><th class="n">Cap today</th><th class="n">Send days</th><th class="n">Awaiting reminder</th><th>Last decision</th><th></th></tr></thead><tbody>
+    ${s.mailboxes.map((m) => { const w = m.warmup_last; return `<tr><td>${esc(m.mailbox)}</td><td>${esc(m.stage_label)}</td>
+      <td class="n ${m.sent_today >= m.daily_cap && m.daily_cap ? "warn" : ""}">${fmt(m.sent_today)}</td><td class="n">${fmt(m.daily_cap)}</td><td class="n">${fmt(m.send_days_used)}</td>
+      <td class="n">${fmt(m.awaiting_reminder)}</td>
+      <td class="small">${w ? `<span class="${w.action === "stepback" ? "bad" : w.action === "hold" ? "warn" : ""}">${esc(w.action)}</span> ${esc(w.day)}: ${esc(w.reason)}` : '<span class="muted">none yet</span>'}</td>
+      <td><button class="small" data-stage="${esc(m.mailbox)}" data-cur="${m.stage}">Set stage</button></td></tr>`; }).join("")}
     </tbody></table>
     <details class="small"><summary>Next planned days</summary><table><thead><tr><th>Date</th><th class="n">Invites</th><th class="n">Reminders</th></tr></thead><tbody>
     ${p.days.slice(0, 30).map((x) => `<tr><td>${esc(x.date)}</td><td class="n">${fmt(x.invites)}</td><td class="n">${fmt(x.reminders)}</td></tr>`).join("")}
@@ -210,9 +215,9 @@ async function loadSummary() {
       Hard-bounce rate: ${sr.bounce ? pct(sr.bounce.rate) + " over last " + fmt(sr.bounce.sends) + " sends (limit " + pct(sr.bounce.threshold) + ", min sample " + fmt(sr.bounce.min_sample) + ")" : "–"}<br>
       Sender heartbeat: ${sr.heartbeat ? esc(ago(sr.heartbeat.last_send_run)) + " (max " + fmt(sr.heartbeat.max_minutes) + " min in window)" : "–"}
     </p>
-    <p class="small"><b>Titan bounce guard</b> (mailbox 1h / 24h / 72h · domain 24h / 72h)<br>
+    <p class="small"><b>Bounce guard</b> (mailbox 1h / 24h / 72h · domain 24h / 72h)<br>
     ${Object.entries(h.bounce_guard || {}).map(([mb, g]) => `${esc(mb)}: ${g.counts.mb_hour} / ${g.counts.mb_day} / ${g.counts.mb_3day} · ${g.counts.dom_day} / ${g.counts.dom_3day} ${g.blocked ? '<span class="bad">BLOCKED</span>' : '<span class="ok">ok</span>'}`).join("<br>")}</p>
-    ${Object.keys(h.quota_blocks || {}).length ? `<p class="small bad">SMTP quota hit today: ${esc(Object.keys(h.quota_blocks).map((x) => x.replace("quota_block:", "")).join(", "))}</p>` : ""}`;
+    ${Object.keys(h.quota_blocks || {}).length ? `<p class="small bad">Sending quota hit today: ${esc(Object.keys(h.quota_blocks).map((x) => x.replace("quota_block:", "")).join(", "))}</p>` : ""}`;
 }
 
 function drawChart(id, cfg) {
@@ -240,9 +245,9 @@ function renderStrata() {
 }
 
 async function loadBatches() {
-  const rows = (await api("batches")).rows;
-  $("#batches").innerHTML = rows.length ? `<table><thead><tr><th>Send day (IST)</th><th class="n">Invited</th><th class="n">participate@</th><th class="n">research@</th><th class="n">Reminded</th><th class="n">Clicked</th><th class="n">Started</th><th class="n">Completed</th><th class="n">Resp. rate</th><th class="n">Hard</th><th class="n">Soft</th><th class="n">Opt-out</th><th class="n">Complaints</th></tr></thead><tbody>
-    ${rows.map((r) => `<tr><td>${esc(r.day)}</td><td class="n">${fmt(r.invited)}</td><td class="n">${fmt(r.via_participate)}</td><td class="n">${fmt(r.via_research)}</td><td class="n">${fmt(r.reminded)}</td><td class="n">${fmt(r.clicked)}</td><td class="n">${fmt(r.started)}</td><td class="n">${fmt(r.completed)}</td><td class="n">${r.invited ? pct(r.completed / r.invited) : "–"}</td><td class="n ${r.invited && r.hard / r.invited > 0.03 ? "bad" : ""}">${fmt(r.hard)}</td><td class="n">${fmt(r.soft)}</td><td class="n">${fmt(r.opted_out)}</td><td class="n">${fmt(r.complaints)}</td></tr>`).join("")}
+  const b = await api("batches"), rows = b.rows, mbs = b.mailboxes || [];
+  $("#batches").innerHTML = rows.length ? `<table><thead><tr><th>Send day (IST)</th><th class="n">Invited</th>${mbs.map((m) => `<th class="n">${esc(m.split("@")[0])}@</th>`).join("")}<th class="n">Reminded</th><th class="n">Clicked</th><th class="n">Started</th><th class="n">Completed</th><th class="n">Resp. rate</th><th class="n">Hard</th><th class="n">Soft</th><th class="n">Opt-out</th><th class="n">Complaints</th></tr></thead><tbody>
+    ${rows.map((r) => `<tr><td>${esc(r.day)}</td><td class="n">${fmt(r.invited)}</td>${mbs.map((m) => `<td class="n">${fmt((r.by_mailbox || {})[m] || 0)}</td>`).join("")}<td class="n">${fmt(r.reminded)}</td><td class="n">${fmt(r.clicked)}</td><td class="n">${fmt(r.started)}</td><td class="n">${fmt(r.completed)}</td><td class="n">${r.invited ? pct(r.completed / r.invited) : "–"}</td><td class="n ${r.invited && r.hard / r.invited > 0.03 ? "bad" : ""}">${fmt(r.hard)}</td><td class="n">${fmt(r.soft)}</td><td class="n">${fmt(r.opted_out)}</td><td class="n">${fmt(r.complaints)}</td></tr>`).join("")}
   </tbody></table>` : '<p class="muted">No invitations sent yet.</p>';
 }
 
@@ -312,6 +317,15 @@ async function openContact(rid) {
 document.addEventListener("click", async (ev) => {
   const a = ev.target.closest("[data-rid]");
   if (a) { ev.preventDefault(); openContact(a.dataset.rid).catch((e) => alert(e.message)); return; }
+  const st = ev.target.closest("[data-stage]");
+  if (st) {
+    const v = prompt(`Set warm-up stage for ${st.dataset.stage} (0 = seed test, 1 = first cap step). Current: ${st.dataset.cur}`, st.dataset.cur);
+    if (v === null || v.trim() === "") return;
+    const note = prompt("Reason (optional)") || "";
+    try { const res = await api("warmup", { method: "POST", body: JSON.stringify({ mailbox: st.dataset.stage, stage: Number(v), note }) }); if (res.error) alert(res.error); }
+    catch (e) { alert(e.message); }
+    loadSummary(); return;
+  }
   const r = ev.target.closest("[data-reply]");
   if (r) { await api("replies/" + r.dataset.reply, { method: "POST", body: JSON.stringify({ handled: r.dataset.h === "1" }) }); loadReplies(); loadSummary(); }
 });
@@ -332,15 +346,18 @@ const SETTING_LABELS = {
   test_mode: "Test mode (true = only test recipients)", test_recipients: "Test recipients (comma separated)",
   start_date: "Start date (YYYY-MM-DD)", end_date: "Last send date (blank = none)", target_end_date: "Target end date (projection only)",
   window_start: "Send window start (IST, HH:MM)", window_end: "Send window end (IST, HH:MM)", send_weekdays: "Send weekdays (1=Mon … 7=Sun)",
-  blackout_dates: "Blackout dates (YYYY-MM-DD or a..b, comma separated)", ramp: "Daily cap ramp per mailbox (day1,day2,…)",
-  cap_max: "Max daily cap per mailbox", hourly_cap: "Hourly cap per mailbox", per_run_max: "Max per sender run per mailbox", pace_evenly: "Spread sends evenly across window",
+  blackout_dates: "Blackout dates (YYYY-MM-DD or a..b, comma separated)",
+  warmup_caps: "Warm-up caps per mailbox/day, stage 1,2,… (max 450)", warmup_seed_cap: "Seed-test day: max seed messages per mailbox",
+  warmup_max_bounce_rate: "Warm-up: advance only below this hard-bounce rate (0.02 = 2%)", warmup_stepback_bounce_rate: "Warm-up: step back at this hard-bounce rate",
+  warmup_window_days: "Warm-up: bounce window (last N send days)",
+  cap_max: "Max daily cap per mailbox (≤ 450)", hourly_cap: "Hourly cap per mailbox", per_run_max: "Max per sender run per mailbox", pace_evenly: "Spread sends evenly across window",
   reminder_after_workdays: "Reminder after N workdays", reminder2_enabled: "Second reminder enabled", reminder2_after_workdays: "Second reminder after N workdays",
-  postal_address: "Postal address in footer", from_name: "From name", complaint_threshold: "Auto-pause at N complaints",
+  postal_address: "Postal address in footer", from_name: "From display name (study or researcher name)", reply_to: "Reply-To address (@survo.tech)", complaint_threshold: "Auto-pause at N complaints",
   bounce_rate_threshold: "Auto-pause hard-bounce rate (0.03 = 3%)", bounce_window: "Bounce-rate window (sends)", bounce_min_sample: "Bounce-rate minimum sample",
   heartbeat_max_minutes: "Auto-pause if no sender run for N min",
-  bounce_guard_mailbox_hour: "Titan guard: max bounces/mailbox/hour", bounce_guard_mailbox_day: "Titan guard: max bounces/mailbox/24h",
-  bounce_guard_mailbox_3day: "Titan guard: max bounces/mailbox/72h", bounce_guard_domain_day: "Titan guard: max bounces/domain/24h",
-  bounce_guard_domain_3day: "Titan guard: max bounces/domain/72h",
+  bounce_guard_mailbox_hour: "Bounce guard: max bounces/mailbox/hour", bounce_guard_mailbox_day: "Bounce guard: max bounces/mailbox/24h",
+  bounce_guard_mailbox_3day: "Bounce guard: max bounces/mailbox/72h", bounce_guard_domain_day: "Bounce guard: max bounces/domain/24h",
+  bounce_guard_domain_3day: "Bounce guard: max bounces/domain/72h",
 };
 const BOOL = new Set(["test_mode", "pace_evenly", "reminder2_enabled"]);
 async function loadSettings() {

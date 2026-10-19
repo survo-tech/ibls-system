@@ -2,7 +2,8 @@
 import DASHBOARD_HTML from "../dashboard/dashboard.html";
 import { evaluateStopRules } from "./cron";
 import { adminEvent, bounceGuard, EDITABLE, getSettings, getState, pauseSending, resumeSending, setSettings } from "./db";
-import { configFromSettings, istMidnightUtc, istParts, MailboxProjectionInput, projectSchedule, windowState, isoOf } from "./schedule";
+import { configFromSettings, DAILY_HARD_MAX, istMidnightUtc, istParts, MailboxProjectionInput, projectSchedule, windowState, isoOf } from "./schedule";
+import { setWarmupStage, warmupView, WarmupView } from "./warmup";
 import { kpis, rollupDay } from "./stats";
 import { csvCell, Env, htmlResponse, json, mailboxes, normRid, nowIso } from "./util";
 
@@ -38,12 +39,15 @@ export async function handleDashboard(req: Request, env: Env, url: URL, actor: s
     }
     if (route === "batches" && req.method === "GET") {
       const { results } = await db.prepare(`SELECT substr(datetime(invited_at, '+330 minutes'), 1, 10) AS day, COUNT(*) AS invited,
-          SUM(mailbox = 'participate@survo.tech') AS via_participate, SUM(mailbox = 'research@survo.tech') AS via_research,
           SUM(reminder_count > 0) AS reminded, SUM(first_click_at IS NOT NULL) AS clicked, SUM(started_at IS NOT NULL) AS started,
           SUM(completed_at IS NOT NULL) AS completed, SUM(bounced = 'hard') AS hard, SUM(bounced = 'soft') AS soft,
           SUM(opted_out_at IS NOT NULL) AS opted_out, SUM(complained_at IS NOT NULL) AS complaints
-        FROM contacts WHERE invited_at IS NOT NULL AND is_test = 0 GROUP BY day ORDER BY day DESC`).all();
-      return json({ rows: results });
+        FROM contacts WHERE invited_at IS NOT NULL AND is_test = 0 GROUP BY day ORDER BY day DESC`).all<Record<string, unknown>>();
+      const per = await db.prepare(`SELECT substr(datetime(invited_at, '+330 minutes'), 1, 10) AS day, mailbox, COUNT(*) AS n
+          FROM contacts WHERE invited_at IS NOT NULL AND is_test = 0 GROUP BY day, mailbox`).all<{ day: string; mailbox: string | null; n: number }>();
+      const by: Record<string, Record<string, number>> = {};
+      for (const r of per.results) (by[r.day] ||= {})[r.mailbox || "?"] = r.n;
+      return json({ mailboxes: mailboxes(env), rows: results.map((r) => ({ ...r, by_mailbox: by[String(r.day)] || {} })) });
     }
     if (route === "activity" && req.method === "GET") {
       const limit = Math.min(200, Number(url.searchParams.get("limit")) || 60);
@@ -96,6 +100,23 @@ export async function handleDashboard(req: Request, env: Env, url: URL, actor: s
       if (!reason) return json({ error: "a reason is required" }, 400);
       await pauseSending(db, `${reason} (by ${actor})`, actor);
       return json({ ok: true });
+    }
+    if (route === "mailboxes" && req.method === "GET") {
+      const s = await getSettings(db);
+      const out = [];
+      for (const mb of mailboxes(env)) out.push(await warmupView(db, s, mb, new Date(), false));
+      return json({ mailboxes: out, hard_max: DAILY_HARD_MAX });
+    }
+    if (route === "warmup" && req.method === "POST") {
+      const body = (await req.json()) as { mailbox?: string; stage?: number | string; note?: string };
+      const mb = String(body.mailbox || "").toLowerCase();
+      const stage = Number(body.stage);
+      if (!mailboxes(env).includes(mb)) return json({ error: "unknown mailbox" }, 400);
+      if (!Number.isInteger(stage) || stage < 0 || stage > 20) return json({ error: "stage must be a whole number (0 = seed test)" }, 400);
+      const s = await getSettings(db);
+      const st = await setWarmupStage(db, s, mb, stage, actor, String(body.note || "").slice(0, 200));
+      await adminEvent(db, actor, "warmup_stage", { mailbox: mb, stage: st.stage, note: body.note || "" });
+      return json({ ok: true, mailbox: mb, stage: st.stage });
     }
     if (route === "resume" && req.method === "POST") {
       await resumeSending(db, actor);
@@ -153,8 +174,10 @@ async function summary(env: Env) {
   const dayStart = istMidnightUtc(today);
   const k = await kpis(db);
 
-  // Projection inputs per mailbox.
+  // Projection inputs per mailbox (invites come from one shared queue; reminders stay with their mailbox).
   const boxes: MailboxProjectionInput[] = [];
+  const warm: Record<string, WarmupView> = {};
+  for (const mb of mailboxes(env)) warm[mb] = await warmupView(db, s, mb, now, false);
   for (const mb of mailboxes(env)) {
     const c = await db.prepare(`SELECT
         (SELECT COUNT(DISTINCT substr(datetime(ts, '+330 minutes'), 1, 10)) FROM events WHERE type='sent' AND mailbox=?1 AND test=0 AND ts < ?2) AS used,
@@ -167,14 +190,15 @@ async function summary(env: Env) {
     const r2 = cfg.reminder2Enabled ? await db.prepare(`SELECT substr(datetime(reminded_at,'+330 minutes'),1,10) AS d, COUNT(*) AS n FROM contacts
         WHERE mailbox=? AND status='reminded' AND reminder_count=1 AND ${elig} GROUP BY d`).bind(mb).all<{ d: string; n: number }>() : { results: [] };
     boxes.push({
-      mailbox: mb, sendDaysUsed: c?.used || 0, sentToday: c?.today || 0, queued: c?.queued || 0,
+      mailbox: mb, sendDaysUsed: c?.used || 0, sentToday: c?.today || 0, queued: c?.queued || 0, stage: warm[mb].stage,
       pendingReminders: Object.fromEntries(r1.results.map((r) => [r.d, r.n])),
       pendingReminders2: Object.fromEntries((r2.results as { d: string; n: number }[]).map((r) => [r.d, r.n])),
     });
   }
   const done = (k.completed || 0) + (k.bounced_hard || 0) + (k.opted_out || 0);
   const remindRate = k.invited ? Math.min(1, Math.max(0.6, 1 - done / k.invited)) : 0.92;
-  const projection = projectSchedule(now, cfg, boxes, remindRate);
+  const sharedQueued = (await db.prepare("SELECT COUNT(*) AS n FROM contacts WHERE status = 'queued' AND is_test = 0").first<{ n: number }>())?.n || 0;
+  const projection = projectSchedule(now, cfg, boxes, remindRate, sharedQueued);
 
   const jobs = await db.prepare("SELECT job, ts, ok, detail FROM job_runs WHERE id IN (SELECT MAX(id) FROM job_runs GROUP BY job) ORDER BY job").all();
   const lastErrors = await db.prepare("SELECT job, ts, detail FROM job_runs WHERE ok = 0 AND id IN (SELECT MAX(id) FROM job_runs WHERE ok = 0 GROUP BY job)").all();
@@ -187,7 +211,10 @@ async function summary(env: Env) {
     funnel: { invited: k.invited || 0, clicked: k.clicked_human || 0, started: k.started || 0, completed: k.completed || 0 },
     schedule: {
       projection, remind_rate_assumed: remindRate, target_end_date: s.target_end_date, window: windowState(now, cfg),
-      mailboxes: boxes.map((b) => ({ mailbox: b.mailbox, send_days_used: b.sendDaysUsed, sent_today: b.sentToday, queued: b.queued,
+      shared_queue: sharedQueued, hard_max_per_mailbox: DAILY_HARD_MAX,
+      mailboxes: boxes.map((b) => ({ mailbox: b.mailbox, send_days_used: b.sendDaysUsed, sent_today: warm[b.mailbox].sent_today,
+        stage: warm[b.mailbox].stage, stage_label: warm[b.mailbox].stage_label, daily_cap: warm[b.mailbox].daily_cap,
+        remaining_today: warm[b.mailbox].remaining_today, warmup_last: warm[b.mailbox].last,
         awaiting_reminder: Object.values(b.pendingReminders).reduce((a, n) => a + n, 0) })),
     },
     health: {

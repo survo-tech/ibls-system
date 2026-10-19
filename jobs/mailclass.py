@@ -10,6 +10,8 @@ Result types:
   opted_out     a human asking to stop (OPT OUT, unsubscribe, remove, stop, not interested)
   query         anything else from a human: needs a researcher's attention
   ignore        our own outgoing copies
+Works for Gmail's DSNs (mailer-daemon@googlemail.com, multipart/report + message/delivery-status +
+X-Failed-Recipients, original message attached) and for remote MTAs' DSNs alike.
 """
 from __future__ import annotations
 
@@ -19,6 +21,8 @@ from email import policy
 from email.message import Message
 from email.utils import getaddresses, parseaddr
 
+RID_VALUE_RE = re.compile(r"[A-Z0-9]{4,16}", re.I)
+OWN_ADDRESSES = ("participate@survo.tech", "research@survo.tech", "survey@survo.tech", "study@survo.tech", "team@survo.tech")
 RID_HEADER_RE = re.compile(r"^X-IBLS-RID:\s*([A-Z0-9]{4,16})\s*$", re.I | re.M)
 MSGID_RID_RE = re.compile(r"<ibls\.([A-Z0-9]{4,16})\.[a-z0-9]+\.[0-9a-f]+@survo\.tech>", re.I)
 STATUS_RE = re.compile(r"^Status:\s*([245])\.(\d{1,3})\.(\d{1,3})", re.I | re.M)
@@ -114,7 +118,7 @@ def _part_text(msg: Message, ctype: str) -> str:
     return "\n".join(out)
 
 
-def classify(raw: bytes, own_addresses: tuple[str, ...] = ("participate@survo.tech", "research@survo.tech")) -> dict:
+def classify(raw: bytes, own_addresses: tuple[str, ...] = OWN_ADDRESSES) -> dict:
     msg = parse(raw)
     frm_name, frm = parseaddr(header(msg, "From"))
     frm = frm.lower()
@@ -141,7 +145,8 @@ def classify(raw: bytes, own_addresses: tuple[str, ...] = ("participate@survo.te
     if looks_bounce:
         ds = _part_text(msg, "message/delivery-status") if is_dsn else ""
         text = ds or body_text(msg)
-        recipient = _first(FINAL_RCPT_RE.pattern, ds or text, re.I | re.M)
+        # Gmail's own DSNs (mailer-daemon@googlemail.com) also name the address in X-Failed-Recipients.
+        recipient = _first(FINAL_RCPT_RE.pattern, ds or text, re.I | re.M) or (header(msg, "X-Failed-Recipients").split(",")[0].strip() or None)
         action = (_first(ACTION_RE.pattern, ds, re.I | re.M) or "").lower()
         sm = STATUS_RE.search(ds) if ds else None
         code = ".".join(sm.groups()) if sm else None

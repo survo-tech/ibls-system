@@ -12,7 +12,8 @@ What it does
   * computes `send_order`: a stratified-random interleave over region x size_band x nature x email_tier so
     every send day gets a balanced slice of the sample (within each stratum the i-th of n contacts gets key
     (i + U(0,1)) / n; all contacts are then sorted by key);
-  * assigns mailboxes alternately (participate@, research@) along that order;
+  * pre-assigns mailboxes round-robin over the five sending mailboxes along that order (invites actually come
+    from one shared queue: the Worker sets the real mailbox when a contact is reserved);
   * marks on-hold rows (tracker "On hold - review" / shared consultant) as status on_hold;
   * writes SQL chunks (UPSERT: re-importing never resets progress such as status, invited_at, clicks);
   * optionally runs `npx wrangler d1 execute ibls --local|--remote --file <chunk>` for each chunk.
@@ -35,7 +36,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-MAILBOXES = ["participate@survo.tech", "research@survo.tech"]
+MAILBOXES = ["participate@survo.tech", "research@survo.tech", "survey@survo.tech", "study@survo.tech", "team@survo.tech"]
 SIZE_TEXT = {"<10cr": "under ₹10 crore", "10-100cr": "₹10–100 crore", ">100cr": "over ₹100 crore"}
 RID_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 COLUMNS = ["rid", "email", "salutation", "director_name", "company", "cin", "state", "region", "size_band", "nature",
@@ -121,7 +122,7 @@ def ensure_rids(rows: list[dict], rng: random.Random) -> None:
 
 
 def assign_order(rows: list[dict], rng: random.Random, offset: int = 0) -> None:
-    """Stratified interleave for sendable rows, then on-hold rows after them; alternate mailboxes."""
+    """Stratified interleave for sendable rows, then on-hold rows after them; round-robin mailboxes."""
     def stratified(subset):
         strata = collections.defaultdict(list)
         for r in subset:
@@ -139,7 +140,7 @@ def assign_order(rows: list[dict], rng: random.Random, offset: int = 0) -> None:
     ordered = stratified([r for r in rows if r["status"] == "queued"]) + stratified([r for r in rows if r["status"] != "queued"])
     for pos, r in enumerate(ordered):
         r["send_order"] = offset + pos + 1
-        r["mailbox"] = MAILBOXES[pos % 2]
+        r["mailbox"] = MAILBOXES[pos % len(MAILBOXES)]
         r.setdefault("is_test", 0)
 
 

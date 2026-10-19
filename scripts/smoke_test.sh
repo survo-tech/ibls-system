@@ -14,6 +14,7 @@ echo "Smoke test against $BASE"
 check "GET / (static site)"            200 "$(code "$BASE/")"
 check "GET /hero.webp"                 200 "$(code "$BASE/hero.webp")"
 check "GET /site.css"                  200 "$(code "$BASE/site.css")"
+check "GET /bimi/logo.svg content type" "image/svg+xml" "$(curl -s -o /dev/null -w "%{content_type}" "$BASE/bimi/logo.svg")"
 case "$BASE" in https://*) check "www redirects to apex" 301 "$(code "https://www.${BASE#https://}/")";; esac
 loc=$(curl -s -o /dev/null -w "%{redirect_url}" -A "smoke-test-bot" "$BASE/s/$RID")
 check "GET /s/$RID -> Kobo with rid"   "https://ee.kobotoolbox.org/jbh8Urj6?d[rid]=$RID" "$loc"

@@ -1,6 +1,6 @@
 # Sends due invitations/reminders. Runs every 10 min, 04:30–11:30 UTC (10:00–17:00 IST), Mon–Fri.
 # The Worker is the source of truth for the window, blackout dates, caps, pause and test mode,
-# so a run outside the window just records a heartbeat and exits.
+# so a run outside the window just records a heartbeat and exits. Five Google Workspace mailboxes send in parallel.
 name: send
 on:
   schedule:
@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
     inputs:
       dry_run:
-        description: "Render and log only (no SMTP, reservations released)"
+        description: "Render and log only (nothing sent, reservations released)"
         type: boolean
         default: false
 concurrency:
@@ -34,15 +34,18 @@ jobs:
         env:
           API_BASE: ${{ vars.API_BASE || 'https://survo.tech' }}
           API_TOKEN: ${{ secrets.API_TOKEN }}
-          SMTP_PASS_PARTICIPATE: ${{ secrets.SMTP_PASS_PARTICIPATE }}
-          SMTP_PASS_RESEARCH: ${{ secrets.SMTP_PASS_RESEARCH }}
-          SMTP_HOST: smtp.titan.email
-          SMTP_PORT: "465"
-          IMAP_HOST: imap.titan.email
+          MAILBOXES: ${{ vars.MAILBOXES || 'participate@survo.tech,research@survo.tech,survey@survo.tech,study@survo.tech,team@survo.tech' }}
+          MAIL_TRANSPORT: ${{ vars.MAIL_TRANSPORT || 'gmail_api' }}
+          GOOGLE_SA_JSON: ${{ secrets.GOOGLE_SA_JSON }}
+          # Only used with MAIL_TRANSPORT=smtp (smtp.gmail.com / imap.gmail.com with app passwords):
+          GMAIL_APP_PW_PARTICIPATE: ${{ secrets.GMAIL_APP_PW_PARTICIPATE }}
+          GMAIL_APP_PW_RESEARCH: ${{ secrets.GMAIL_APP_PW_RESEARCH }}
+          GMAIL_APP_PW_SURVEY: ${{ secrets.GMAIL_APP_PW_SURVEY }}
+          GMAIL_APP_PW_STUDY: ${{ secrets.GMAIL_APP_PW_STUDY }}
+          GMAIL_APP_PW_TEAM: ${{ secrets.GMAIL_APP_PW_TEAM }}
           JITTER_MIN: "20"
           JITTER_MAX: "60"
           RUN_BUDGET_SEC: "540"
           MAX_PER_RUN: "20"
-          SAVE_SENT: ${{ vars.SAVE_SENT || '0' }}
           DRY_RUN: ${{ inputs.dry_run && '1' || '0' }}
         run: python jobs/send.py

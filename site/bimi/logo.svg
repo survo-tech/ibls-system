@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg version="1.2" baseProfile="tiny-ps" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+<title>India Business Leaders Survey</title>
+<rect width="512" height="512" fill="#12305B"/>
+<circle cx="256" cy="256" r="196" fill="none" stroke="#E8B04B" stroke-width="20"/>
+<rect x="146" y="290" width="52" height="96" rx="8" fill="#FFFFFF"/>
+<rect x="230" y="226" width="52" height="160" rx="8" fill="#FFFFFF"/>
+<rect x="314" y="162" width="52" height="224" rx="8" fill="#E8B04B"/>
+<path d="M140 250 L218 184 L270 214 L360 128" fill="none" stroke="#FFFFFF" stroke-width="16" stroke-linecap="round" stroke-linejoin="round"/>
+<circle cx="360" cy="128" r="16" fill="#FFFFFF"/>
+</svg>

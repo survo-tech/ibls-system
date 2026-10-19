@@ -4,10 +4,10 @@ from tests.helpers import FakeApi  # noqa: F401 (sets sys.path)
 import mailclass  # noqa: E402
 import sync_mail  # noqa: E402
 
-DSN_HARD = b"""From: Mail Delivery System <MAILER-DAEMON@mx.titan.email>
+DSN_HARD = b"""From: Mail Delivery System <MAILER-DAEMON@mx.mta.example.net>
 To: participate@survo.tech
 Subject: Undelivered Mail Returned to Sender
-Message-ID: <dsn1@mx.titan.email>
+Message-ID: <dsn1@mx.mta.example.net>
 MIME-Version: 1.0
 Content-Type: multipart/report; report-type=delivery-status; boundary="BOUND"
 
@@ -19,7 +19,7 @@ This is the mail system. Your message could not be delivered.
 --BOUND
 Content-Type: message/delivery-status
 
-Reporting-MTA: dns; mx.titan.email
+Reporting-MTA: dns; mx.mta.example.net
 
 Final-Recipient: rfc822; gone@acme.example
 Original-Recipient: rfc822;gone@acme.example

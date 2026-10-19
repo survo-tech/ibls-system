@@ -31,7 +31,8 @@ class RenderTests(unittest.TestCase):
         self.assertIn("Start the survey: https://survo.tech/s/IBAAAA22\n(about 15–20 minutes · confidential · voluntary)", text)
         self.assertIn("You can verify this study at https://survo.tech or by writing to ethics@london.edu quoting REC1101.", text)
         self.assertIn("With thanks,\nSukrit Singh Puri, London Business School\nVishan Nigam and Aroon Narayanan, MIT\n"
-                      "Shivram Viswanathan, Harvard University\nFieldwork: Morsel Research and Development Pvt Ltd · participate@survo.tech", text)
+                      "Shivram Viswanathan, Harvard University\nFieldwork contact: Bishnu Datta Behuria, Morsel Research and Development · bishnu@morselindia.org", text)
+        self.assertIn('href="mailto:bishnu@morselindia.org"', html)
         self.assertIn('To stop further emails, reply "OPT OUT" or visit https://survo.tech/optout/IBAAAA22.', text)
         self.assertTrue(text.rstrip().endswith("https://survo.tech/optout/IBAAAA22."))  # empty postal address adds nothing
         # HTML: one button, no images, escaped company
@@ -65,14 +66,22 @@ class BuildMessageTests(unittest.TestCase):
         m = send.build_message(msg(), SETTINGS, "research@survo.tech")
         self.assertEqual(m["To"], "ceo@acme.example")
         self.assertIn("research@survo.tech", m["From"])
-        self.assertEqual(m["Reply-To"], "participate@survo.tech")
-        self.assertEqual(m["List-Unsubscribe"], "<mailto:participate@survo.tech?subject=OPT%20OUT>, <https://survo.tech/optout/IBAAAA22>")
+        self.assertEqual(m["From"], "India Business Leaders Survey <research@survo.tech>")
+        self.assertEqual(m["Reply-To"], "research@survo.tech")  # default Reply-To
+        self.assertEqual(m["List-Unsubscribe"], "<mailto:research@survo.tech?subject=OPT%20OUT>, <https://survo.tech/optout/IBAAAA22>")
         self.assertEqual(m["List-Unsubscribe-Post"], "List-Unsubscribe=One-Click")
         self.assertEqual(m["X-IBLS-RID"], "IBAAAA22")
         self.assertRegex(m["Message-ID"], r"^<ibls\.IBAAAA22\.invite\.[0-9a-f]+@survo\.tech>$")
         self.assertTrue(m.is_multipart())
         self.assertEqual([p.get_content_type() for p in m.iter_parts()], ["text/plain", "text/html"])
         self.assertFalse(any(p.get_content_disposition() == "attachment" for p in m.walk()))
+
+    def test_configurable_from_name_and_reply_to(self):
+        st = dict(SETTINGS, from_name="Sukrit Singh Puri, London Business School", reply_to="team@survo.tech")
+        m = send.build_message(msg(), st, "study@survo.tech")
+        self.assertEqual(m["From"], '"Sukrit Singh Puri, London Business School" <study@survo.tech>')
+        self.assertEqual(m["Reply-To"], "team@survo.tech")
+        self.assertTrue(m["List-Unsubscribe"].startswith("<mailto:team@survo.tech?"))
 
     def test_reminder_threads_to_invite(self):
         m = send.build_message(msg(kind="reminder", invite_msgid="<ibls.IBAAAA22.invite.abc@survo.tech>"), SETTINGS, "participate@survo.tech")
