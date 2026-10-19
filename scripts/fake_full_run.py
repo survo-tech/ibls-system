@@ -187,6 +187,13 @@ def main(argv=None) -> int:
         return 0
     if a.verify:
         return verify(a.base)
+    # Two runners on the same day would reuse the same run ids (and so the same reservations): never allow it.
+    import fcntl
+    lock = open(OUT / "run.lock", "w")
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        raise SystemExit("another fake_full_run.py is already running") from None
     api = Api(base=a.base)
     d = dt.date.fromisoformat(a.start)
     with open(OUT / "sent.jsonl", "a") as f:
