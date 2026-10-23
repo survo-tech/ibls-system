@@ -18,7 +18,8 @@ routes = [
 directory = "./site"
 binding = "ASSETS"
 not_found_handling = "none"
-run_worker_first = ["/s/*", "/optout/*", "/dashboard", "/dashboard/*", "/api/*", "/bimi/*"]
+# All requests hit the Worker first so www.survo.tech always 301s to the apex; it falls through to ASSETS.
+run_worker_first = true
 
 [[d1_databases]]
 binding = "DB"
