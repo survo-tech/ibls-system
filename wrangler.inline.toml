@@ -38,7 +38,7 @@ KOBO_FORM_URL = "https://ee.kobotoolbox.org/jbh8Urj6"
 MAILBOXES = "participate@survo.tech,research@survo.tech,survey@survo.tech,study@survo.tech,team@survo.tech"
 # Cloudflare Access (Zero Trust) for /dashboard. Fill in after creating the Access app.
 # ACCESS_TEAM_DOMAIN example: "morsel.cloudflareaccess.com"; ACCESS_AUD = the app's AUD tag.
-ACCESS_TEAM_DOMAIN = "cybermitra.cloudflareaccess.com"
+ACCESS_TEAM_DOMAIN = "morsel-research.cloudflareaccess.com"
 ACCESS_AUD = "a102d6fafc6fe088d56596d99e793af4beea13a0042ef0fdd7cc4ebdb45c4959"
 
 # Secrets (set with `npx wrangler secret put NAME`, never committed):
