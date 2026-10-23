@@ -51,4 +51,6 @@ jobs:
           KOBO_TOKEN: ${{ secrets.KOBO_TOKEN }}
           KOBO_ASSET_UID: ${{ secrets.KOBO_ASSET_UID }}
           KOBO_API_BASE: ${{ vars.KOBO_API_BASE || 'https://kf.kobotoolbox.org' }}
-        run: python jobs/sync_kobo.py
+        run: |
+          if [ -z "$KOBO_TOKEN" ] || [ -z "$KOBO_ASSET_UID" ]; then echo "KOBO_TOKEN/KOBO_ASSET_UID not set yet; skipping Kobo sync"; exit 0; fi
+          python jobs/sync_kobo.py
