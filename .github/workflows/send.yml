@@ -1,12 +1,12 @@
-# Sends due invitations/reminders. Runs every 10 min, 04:30–11:30 UTC (10:00–17:00 IST), Mon–Fri.
+# Sends due invitations/reminders. Runs every 10 min, 00:30–16:30 UTC (06:00–22:00 IST), every day.
 # The Worker is the source of truth for the window, blackout dates, caps, pause and test mode,
 # so a run outside the window just records a heartbeat and exits. Five Google Workspace mailboxes send in parallel.
 name: send
 on:
   schedule:
-    - cron: "30-59/10 4 * * 1-5"
-    - cron: "*/10 5-10 * * 1-5"
-    - cron: "0-30/10 11 * * 1-5"
+    - cron: "30-59/10 0 * * *"
+    - cron: "*/10 1-15 * * *"
+    - cron: "0-30/10 16 * * *"
   workflow_dispatch:
     inputs:
       dry_run:
