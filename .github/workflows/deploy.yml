@@ -39,14 +39,15 @@ jobs:
         run: npx wrangler d1 migrations apply ibls --remote
       - name: Deploy Worker
         run: npx wrangler deploy
-      - name: Sync Worker secrets (API_TOKEN, DASHBOARD_USERS)
+      - name: Sync Worker secrets (API_TOKEN, DASHBOARD_USERS, GH_DISPATCH_TOKEN)
         env:
           API_TOKEN: ${{ secrets.API_TOKEN }}
           DASHBOARD_USERS: ${{ secrets.DASHBOARD_USERS }}
+          GH_DISPATCH_TOKEN: ${{ secrets.GH_DISPATCH_TOKEN }}
         run: |
           python - <<'PY' > /tmp/secrets.json
           import json, os
-          print(json.dumps({k: os.environ[k] for k in ("API_TOKEN", "DASHBOARD_USERS") if os.environ.get(k)}))
+          print(json.dumps({k: os.environ[k] for k in ("API_TOKEN", "DASHBOARD_USERS", "GH_DISPATCH_TOKEN") if os.environ.get(k)}))
           PY
           if [ "$(cat /tmp/secrets.json)" != "{}" ]; then npx wrangler secret bulk /tmp/secrets.json; fi
           rm -f /tmp/secrets.json

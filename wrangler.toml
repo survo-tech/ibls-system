@@ -36,7 +36,7 @@ fallthrough = true
 
 # Housekeeping: stop rules, stale reservations, daily rollups.
 [triggers]
-crons = ["*/15 * * * *"]
+crons = ["*/10 * * * *"]
 
 [vars]
 SITE_ORIGIN = "https://survo.tech"

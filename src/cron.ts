@@ -83,6 +83,13 @@ export async function runCron(env: Env): Promise<Record<string, unknown>> {
       out.paused = s.pause_reason || "paused";
     }
 
+    // Trigger the GitHub send workflow ourselves: GitHub's own cron fires hours late on this repo.
+    // The workflow's concurrency group keeps at most one run going and one queued.
+    if (env.GH_DISPATCH_TOKEN && s.paused !== "true" && out.paused === undefined) {
+      const w = windowState(new Date(), configFromSettings(s));
+      if (w.open) out.dispatch = await dispatchSend(env);
+    }
+
     // Rollups for today and yesterday (late bounces / Kobo syncs land after midnight).
     const today = istParts(new Date()).date;
     await rollupDay(db, today);
@@ -97,4 +104,25 @@ export async function runCron(env: Env): Promise<Record<string, unknown>> {
   }
   await setState(db, { cron_last: JSON.stringify(out) }).catch(() => undefined);
   return out;
+}
+
+/** POST a workflow_dispatch for send.yml. Returns the HTTP status (204 = queued). */
+export async function dispatchSend(env: Env): Promise<number | string> {
+  const repo = env.GH_REPO || "survo-tech/ibls-system";
+  try {
+    const r = await fetch(`https://api.github.com/repos/${repo}/actions/workflows/send.yml/dispatches`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${env.GH_DISPATCH_TOKEN}`,
+        accept: "application/vnd.github+json",
+        "x-github-api-version": "2022-11-28",
+        "user-agent": "ibls-survo-worker",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ ref: "main" }),
+    });
+    return r.status;
+  } catch (e) {
+    return String((e as Error).message || e);
+  }
 }

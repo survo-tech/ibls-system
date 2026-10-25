@@ -11,6 +11,8 @@ export interface Env {
   API_TOKEN?: string;
   DASHBOARD_USERS?: string;
   MAILBOXES?: string;
+  GH_DISPATCH_TOKEN?: string; // fine-grained PAT, Actions read/write on the repo below
+  GH_REPO?: string;           // default survo-tech/ibls-system
   ALLOW_TIME_OVERRIDE?: string; // local tests only
 }
 
