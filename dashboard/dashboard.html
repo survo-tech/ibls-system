@@ -92,6 +92,19 @@
     </div>
   </section>
 
+  <section class="card" id="progressCard">
+    <h2>Firm-by-firm progress (for the phone team)</h2>
+    <p class="muted small">Who has been invited and when, and the projected invite date for every firm still in the queue. Projected dates follow the current warm-up ramp and send window, so they move if sending is paused or caps change. <span id="progMeta"></span></p>
+    <div class="tabs" id="progTabs"></div>
+    <p>
+      <input type="search" id="progQ" placeholder="company, RID, email, director, phone or city" style="max-width:340px" />
+      <input type="date" id="progDate" title="Invited on or projected for this date" />
+      <a class="btn" id="progExport" href="/dashboard/api/progress.csv">Export to Excel (CSV)</a>
+    </p>
+    <div class="scroll" id="progress"></div>
+    <p class="small"><button id="progPrev">&larr; Prev</button> <span id="progPage" class="muted"></span> <button id="progNext">Next &rarr;</button></p>
+  </section>
+
   <section class="card"><h2>Per batch (send day)</h2><div class="scroll" id="batches"></div></section>
 
   <section class="card"><h2>Recent activity</h2><div class="scroll" id="activity"></div></section>
@@ -380,8 +393,36 @@ $("#btnSave").addEventListener("click", async (ev) => {
   catch (e) { $("#saveMsg").textContent = e.message; }
 });
 
+let progStage = "", progOffset = 0, progTimer = null;
+const PROG_STAGES = ["Invited", "Reminded", "Clicked link", "Started survey", "Completed", "Scheduled", "On hold", "Bounced", "Opted out", "Do not contact"];
+async function loadProgress() {
+  const p = new URLSearchParams({ offset: progOffset, limit: 100 });
+  if (progStage) p.set("stage", progStage);
+  const q = $("#progQ").value.trim(); if (q) p.set("q", q);
+  const dt = $("#progDate").value; if (dt) p.set("date", dt);
+  const d = await api("progress?" + p);
+  const all = Object.values(d.counts).reduce((a, n) => a + n, 0);
+  $("#progTabs").innerHTML = [`<button data-s="" class="${progStage ? "" : "on"}">All (${fmt(all)})</button>`]
+    .concat(PROG_STAGES.filter((s) => d.counts[s]).map((s) => `<button data-s="${esc(s)}" class="${progStage === s ? "on" : ""}">${esc(s)} (${fmt(d.counts[s])})</button>`)).join("");
+  $("#progMeta").textContent = `As of ${d.generated} IST.` + (d.projection_end ? ` Last projected invite: ${d.projection_end}.` : "");
+  $("#progExport").href = "/dashboard/api/progress.csv" + (progStage ? "?stage=" + encodeURIComponent(progStage) : "");
+  $("#progress").innerHTML = d.rows.length ? `<table><thead><tr><th>RID</th><th>Company</th><th>Directors / phones</th><th>Location</th><th>Stage</th><th>Invited on (IST)</th><th>Projected invite</th><th>Reminder</th><th>Note</th></tr></thead><tbody>
+    ${d.rows.map((r) => `<tr><td><a href="#" data-rid="${esc(r.rid)}">${esc(r.rid)}</a></td><td>${esc(r.company)}<div class="small muted">${esc(r.email)}</div></td>
+      <td class="small">${esc(r.director_names)}<div class="muted">${esc([r.company_phone, r.director_mobiles].filter(Boolean).join("; "))}</div></td>
+      <td class="small">${esc([r.city, r.state].filter(Boolean).join(", "))}</td><td><span class="tag">${esc(r.stage)}</span></td>
+      <td class="small">${esc(r.invited_on)}${r.mailbox ? `<div class="muted">${esc(r.mailbox)}</div>` : ""}</td><td class="small">${esc(r.projected_invite)}</td>
+      <td class="small">${esc(r.reminder_on)}</td><td class="small">${esc(r.note)}</td></tr>`).join("")}</tbody></table>` : '<p class="muted">No firms match.</p>';
+  $("#progPage").textContent = d.total ? `${fmt(progOffset + 1)}–${fmt(Math.min(progOffset + d.rows.length, d.total))} of ${fmt(d.total)}` : "";
+  $("#progPrev").disabled = progOffset === 0; $("#progNext").disabled = progOffset + d.rows.length >= d.total;
+}
+$("#progTabs").addEventListener("click", (e) => { const b = e.target.closest("button"); if (!b) return; progStage = b.dataset.s; progOffset = 0; loadProgress(); });
+$("#progQ").addEventListener("input", () => { clearTimeout(progTimer); progTimer = setTimeout(() => { progOffset = 0; loadProgress(); }, 350); });
+$("#progDate").addEventListener("change", () => { progOffset = 0; loadProgress(); });
+$("#progPrev").addEventListener("click", () => { progOffset = Math.max(0, progOffset - 100); loadProgress(); });
+$("#progNext").addEventListener("click", () => { progOffset += 100; loadProgress(); });
+
 async function refresh() {
-  const jobs = [loadSummary(), loadDaily(), loadStrata(), loadBatches(), loadActivity(), loadReplies(), loadSettings()];
+  const jobs = [loadSummary(), loadDaily(), loadStrata(), loadBatches(), loadActivity(), loadReplies(), loadSettings(), loadProgress()];
   const res = await Promise.allSettled(jobs);
   const failed = res.filter((r) => r.status === "rejected");
   if (failed.length) console.error(failed);

@@ -2,7 +2,7 @@
 import DASHBOARD_HTML from "../dashboard/dashboard.html";
 import { evaluateStopRules } from "./cron";
 import { adminEvent, bounceGuard, EDITABLE, getSettings, getState, pauseSending, resumeSending, setSettings } from "./db";
-import { configFromSettings, DAILY_HARD_MAX, istMidnightUtc, istParts, MailboxProjectionInput, projectSchedule, windowState, isoOf } from "./schedule";
+import { assignInviteDates, configFromSettings, DAILY_HARD_MAX, istDateOf, istMidnightUtc, istParts, MailboxProjectionInput, projectSchedule, windowState, isoOf, workdaysAfter } from "./schedule";
 import { setWarmupStage, warmupView, WarmupView } from "./warmup";
 import { kpis, rollupDay } from "./stats";
 import { csvCell, Env, htmlResponse, json, mailboxes, normRid, nowIso } from "./util";
@@ -141,6 +141,20 @@ export async function handleDashboard(req: Request, env: Env, url: URL, actor: s
       return json({ ok: true, changed: Object.keys(diff) });
     }
     if (route === "export.csv" && req.method === "GET") return exportCsv(db);
+    if (route === "progress" && req.method === "GET") {
+      const d = await progressRows(env);
+      const q = (url.searchParams.get("q") || "").trim().toLowerCase();
+      const st = url.searchParams.get("stage") || "";
+      const day = url.searchParams.get("date") || "";
+      let rows = d.rows;
+      if (st) rows = rows.filter((r) => r.stage === st);
+      if (day) rows = rows.filter((r) => r.invited_on.startsWith(day) || r.projected_invite === day);
+      if (q) rows = rows.filter((r) => [r.rid, r.company, r.email, r.director_names, r.company_phone, r.director_mobiles, r.city].some((v) => v.toLowerCase().includes(q)));
+      const offset = Math.max(0, Number(url.searchParams.get("offset")) || 0);
+      const limit = Math.min(500, Number(url.searchParams.get("limit")) || 100);
+      return json({ total: rows.length, counts: d.counts, generated: d.generated, projection_end: d.projection_end, rows: rows.slice(offset, offset + limit) });
+    }
+    if (route === "progress.csv" && req.method === "GET") return progressCsv(env, url.searchParams.get("stage") || "");
     return json({ error: "not found" }, 404);
   } catch (e) {
     return json({ error: String((e as Error).message || e) }, 500);
@@ -174,31 +188,7 @@ async function summary(env: Env) {
   const dayStart = istMidnightUtc(today);
   const k = await kpis(db);
 
-  // Projection inputs per mailbox (invites come from one shared queue; reminders stay with their mailbox).
-  const boxes: MailboxProjectionInput[] = [];
-  const warm: Record<string, WarmupView> = {};
-  for (const mb of mailboxes(env)) warm[mb] = await warmupView(db, s, mb, now, false);
-  for (const mb of mailboxes(env)) {
-    const c = await db.prepare(`SELECT
-        (SELECT COUNT(DISTINCT substr(datetime(ts, '+330 minutes'), 1, 10)) FROM events WHERE type='sent' AND mailbox=?1 AND test=0 AND ts < ?2) AS used,
-        (SELECT COUNT(*) FROM events WHERE type='sent' AND mailbox=?1 AND ts >= ?2) AS today,
-        (SELECT COUNT(*) FROM contacts WHERE mailbox=?1 AND status='queued' AND is_test=0) AS queued`).bind(mb, dayStart)
-      .first<{ used: number; today: number; queued: number }>();
-    const elig = "completed_at IS NULL AND opted_out_at IS NULL AND complained_at IS NULL AND consent_declined_at IS NULL AND is_test=0";
-    const r1 = await db.prepare(`SELECT substr(datetime(invited_at,'+330 minutes'),1,10) AS d, COUNT(*) AS n FROM contacts
-        WHERE mailbox=? AND status='invited' AND reminder_count=0 AND ${elig} GROUP BY d`).bind(mb).all<{ d: string; n: number }>();
-    const r2 = cfg.reminder2Enabled ? await db.prepare(`SELECT substr(datetime(reminded_at,'+330 minutes'),1,10) AS d, COUNT(*) AS n FROM contacts
-        WHERE mailbox=? AND status='reminded' AND reminder_count=1 AND ${elig} GROUP BY d`).bind(mb).all<{ d: string; n: number }>() : { results: [] };
-    boxes.push({
-      mailbox: mb, sendDaysUsed: c?.used || 0, sentToday: c?.today || 0, queued: c?.queued || 0, stage: warm[mb].stage,
-      pendingReminders: Object.fromEntries(r1.results.map((r) => [r.d, r.n])),
-      pendingReminders2: Object.fromEntries((r2.results as { d: string; n: number }[]).map((r) => [r.d, r.n])),
-    });
-  }
-  const done = (k.completed || 0) + (k.bounced_hard || 0) + (k.opted_out || 0);
-  const remindRate = k.invited ? Math.min(1, Math.max(0.6, 1 - done / k.invited)) : 0.92;
-  const sharedQueued = (await db.prepare("SELECT COUNT(*) AS n FROM contacts WHERE status = 'queued' AND is_test = 0").first<{ n: number }>())?.n || 0;
-  const projection = projectSchedule(now, cfg, boxes, remindRate, sharedQueued);
+  const { boxes, warm, remindRate, sharedQueued, projection } = await buildProjection(env, s, now, k);
 
   const jobs = await db.prepare("SELECT job, ts, ok, detail FROM job_runs WHERE id IN (SELECT MAX(id) FROM job_runs GROUP BY job) ORDER BY job").all();
   const lastErrors = await db.prepare("SELECT job, ts, detail FROM job_runs WHERE ok = 0 AND id IN (SELECT MAX(id) FROM job_runs WHERE ok = 0 GROUP BY job)").all();
@@ -225,6 +215,114 @@ async function summary(env: Env) {
       stop_rules: stop.checks, stop_rule_would_pause: stop.pause ? stop.reason : null, bounce_guard: guards,
     },
   };
+}
+
+/** Projection inputs per mailbox (invites come from one shared queue; reminders stay with their mailbox). */
+async function buildProjection(env: Env, s: Record<string, string>, now: Date, k: Record<string, number>, maxDays = 120) {
+  const db = env.DB;
+  const cfg = configFromSettings(s);
+  const dayStart = istMidnightUtc(istParts(now).date);
+  const boxes: MailboxProjectionInput[] = [];
+  const warm: Record<string, WarmupView> = {};
+  for (const mb of mailboxes(env)) warm[mb] = await warmupView(db, s, mb, now, false);
+  for (const mb of mailboxes(env)) {
+    const c = await db.prepare(`SELECT
+        (SELECT COUNT(DISTINCT substr(datetime(ts, '+330 minutes'), 1, 10)) FROM events WHERE type='sent' AND mailbox=?1 AND test=0 AND ts < ?2) AS used,
+        (SELECT COUNT(*) FROM events WHERE type='sent' AND mailbox=?1 AND ts >= ?2) AS today,
+        (SELECT COUNT(*) FROM contacts WHERE mailbox=?1 AND status='queued' AND is_test=0) AS queued`).bind(mb, dayStart)
+      .first<{ used: number; today: number; queued: number }>();
+    const elig = "completed_at IS NULL AND opted_out_at IS NULL AND complained_at IS NULL AND consent_declined_at IS NULL AND is_test=0";
+    const r1 = await db.prepare(`SELECT substr(datetime(invited_at,'+330 minutes'),1,10) AS d, COUNT(*) AS n FROM contacts
+        WHERE mailbox=? AND status='invited' AND reminder_count=0 AND ${elig} GROUP BY d`).bind(mb).all<{ d: string; n: number }>();
+    const r2 = cfg.reminder2Enabled ? await db.prepare(`SELECT substr(datetime(reminded_at,'+330 minutes'),1,10) AS d, COUNT(*) AS n FROM contacts
+        WHERE mailbox=? AND status='reminded' AND reminder_count=1 AND ${elig} GROUP BY d`).bind(mb).all<{ d: string; n: number }>() : { results: [] };
+    boxes.push({
+      mailbox: mb, sendDaysUsed: c?.used || 0, sentToday: c?.today || 0, queued: c?.queued || 0, stage: warm[mb].stage,
+      pendingReminders: Object.fromEntries(r1.results.map((r) => [r.d, r.n])),
+      pendingReminders2: Object.fromEntries((r2.results as { d: string; n: number }[]).map((r) => [r.d, r.n])),
+    });
+  }
+  const done = (k.completed || 0) + (k.bounced_hard || 0) + (k.opted_out || 0);
+  const remindRate = k.invited ? Math.min(1, Math.max(0.6, 1 - done / k.invited)) : 0.92;
+  const sharedQueued = (await db.prepare("SELECT COUNT(*) AS n FROM contacts WHERE status = 'queued' AND is_test = 0").first<{ n: number }>())?.n || 0;
+  const projection = projectSchedule(now, cfg, boxes, remindRate, sharedQueued, maxDays);
+  return { boxes, warm, remindRate, sharedQueued, projection };
+}
+
+const PROGRESS_COLS: [string, string][] = [
+  ["rid", "RID"], ["company", "Company"], ["director_names", "Directors"], ["salutation", "Addressed as"], ["email", "Email invited"],
+  ["company_phone", "Company phone"], ["director_mobiles", "Director mobiles"], ["city", "City"], ["state", "State"], ["region", "Region"],
+  ["size_band", "Size band"], ["nature", "Nature"], ["stage", "Stage"], ["invited_on", "Invited on (IST)"], ["mailbox", "Sent from"],
+  ["projected_invite", "Projected invite date"], ["reminder_on", "Reminder (IST)"], ["first_click", "First click (IST)"],
+  ["completed_on", "Completed (IST)"], ["note", "Note"],
+];
+
+function istStamp(iso: unknown): string {
+  if (!iso) return "";
+  const d = new Date(String(iso));
+  if (isNaN(d.getTime())) return String(iso);
+  return new Date(d.getTime() + 330 * 60000).toISOString().slice(0, 16).replace("T", " ");
+}
+
+/** Every real contact with its stage, actual send times and (for the queue) projected invite date. */
+async function progressRows(env: Env): Promise<{ rows: Record<string, string>[]; counts: Record<string, number>; generated: string; projection_end: string | null }> {
+  const db = env.DB;
+  const s = await getSettings(db);
+  const cfg = configFromSettings(s);
+  const now = new Date();
+  const { projection } = await buildProjection(env, s, now, await kpis(db), 400);
+  const { results } = await db.prepare(`SELECT rid, company, director_names, salutation, email, company_phone, director_mobiles, city, state, region,
+      size_band, nature, status, mailbox, invited_at, reminded_at, reminder_count, first_click_at, started_at, completed_at, bounced, opted_out_at,
+      consent_declined_at, complained_at, send_order FROM contacts WHERE is_test = 0 ORDER BY CASE status WHEN 'queued' THEN 1 ELSE 0 END, send_order, rid`)
+    .all<Record<string, unknown>>();
+  const queued = results.filter((r) => r.status === "queued");
+  const dates = assignInviteDates(projection.days, queued.length);
+  const proj = new Map<unknown, string>();
+  queued.forEach((r, i) => proj.set(r.rid, dates[i]));
+  const counts: Record<string, number> = {};
+  const rows = results.map((r) => {
+    let stage: string, note = "";
+    if (r.completed_at) stage = "Completed";
+    else if (r.bounced === "hard" || r.status === "bounced") { stage = "Bounced"; note = "Email address failed; reach by phone"; }
+    else if (r.opted_out_at || r.status === "opted_out") { stage = "Opted out"; note = "Do not contact"; }
+    else if (r.status === "do_not_contact" || r.complained_at) { stage = "Do not contact"; note = "Do not contact"; }
+    else if (r.consent_declined_at) { stage = "Declined consent"; note = "Do not contact"; }
+    else if (r.status === "on_hold") { stage = "On hold"; note = "Shared consultant address; not scheduled"; }
+    else if (r.status === "queued") stage = "Scheduled";
+    else if (r.started_at) stage = "Started survey";
+    else if (r.first_click_at) stage = "Clicked link";
+    else if (Number(r.reminder_count) > 0) stage = "Reminded";
+    else stage = "Invited";
+    counts[stage] = (counts[stage] || 0) + 1;
+    let reminder = "";
+    if (r.reminded_at) reminder = istStamp(r.reminded_at);
+    else if (r.invited_at && ["Invited", "Clicked link", "Started survey"].includes(stage)) reminder = "due ~" + workdaysAfter(istDateOf(String(r.invited_at)), cfg.reminderAfterWorkdays, cfg);
+    const p = proj.get(r.rid);
+    return {
+      rid: String(r.rid), company: String(r.company || ""), director_names: String(r.director_names || ""), salutation: String(r.salutation || ""),
+      email: String(r.email || ""), company_phone: String(r.company_phone || ""), director_mobiles: String(r.director_mobiles || ""),
+      city: String(r.city || ""), state: String(r.state || ""), region: String(r.region || ""), size_band: String(r.size_band || ""), nature: String(r.nature || ""),
+      stage, invited_on: istStamp(r.invited_at), mailbox: r.invited_at ? String(r.mailbox || "") : "",
+      projected_invite: r.status === "queued" ? (p || "after current projection") : "",
+      reminder_on: reminder, first_click: istStamp(r.first_click_at), completed_on: istStamp(r.completed_at), note,
+    };
+  });
+  return { rows, counts, generated: istStamp(now.toISOString()), projection_end: projection.lastInviteDate };
+}
+
+async function progressCsv(env: Env, stageFilter: string): Promise<Response> {
+  const { rows } = await progressRows(env);
+  const sel = stageFilter ? rows.filter((r) => r.stage === stageFilter) : rows;
+  const lines = [PROGRESS_COLS.map(([, h]) => csvCell(h)).join(",")];
+  for (const r of sel) lines.push(PROGRESS_COLS.map(([k]) => csvCell(r[k])).join(","));
+  const tag = stageFilter ? "-" + stageFilter.toLowerCase().replace(/[^a-z]+/g, "-") : "";
+  return new Response("\ufeff" + lines.join("\r\n") + "\r\n", {
+    headers: {
+      "content-type": "text/csv; charset=utf-8",
+      "content-disposition": `attachment; filename="ibls-progress${tag}-${isoOf(new Date()).slice(0, 10)}.csv"`,
+      "cache-control": "no-store",
+    },
+  });
 }
 
 function safeJson(s: string | undefined) {

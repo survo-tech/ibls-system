@@ -254,7 +254,7 @@ export interface ProjectionResult {
  * Day-by-day simulation of the remaining work at the configured caps.
  * `remindRate` = share of invitees still needing a reminder (not completed/bounced/opted out).
  */
-export function projectSchedule(now: Date, cfg: ScheduleConfig, boxes: MailboxProjectionInput[], remindRate = 0.9, sharedQueued?: number): ProjectionResult {
+export function projectSchedule(now: Date, cfg: ScheduleConfig, boxes: MailboxProjectionInput[], remindRate = 0.9, sharedQueued?: number, maxDays = 120): ProjectionResult {
   const p = istParts(now);
   // With a shared invite queue (sharedQueued given), invites are drawn from one pool by whichever mailbox has room.
   let pool = sharedQueued ?? 0;
@@ -309,7 +309,7 @@ export function projectSchedule(now: Date, cfg: ScheduleConfig, boxes: MailboxPr
         sendDays++;
         finish = d;
         if (dayInv > 0) lastInvite = d;
-        if (daysOut.length < 120) daysOut.push({ date: d, invites: Math.round(dayInv), reminders: Math.round(dayRem) });
+        if (daysOut.length < maxDays) daysOut.push({ date: d, invites: Math.round(dayInv), reminders: Math.round(dayRem) });
       }
     }
     if (cfg.endDate && d > cfg.endDate) break;
@@ -347,3 +347,24 @@ function num(v: string | undefined, d: number): number {
 
 /** Stratified interleave key, documented here for reference; the import script computes it in Python. */
 export const SEND_ORDER_DOC = "send_order = rank of (i + u)/n within each region×size_band×nature×email_tier stratum";
+
+/** The date that is `n` workdays after `date` (n = 0 returns date). */
+export function workdaysAfter(date: string, n: number, cfg: Pick<ScheduleConfig, "weekdays" | "blackout">): string {
+  let d = date, left = n, guard = 0;
+  while (left > 0 && guard++ < 400) { d = addDays(d, 1); if (isWorkday(d, cfg)) left--; }
+  return d;
+}
+
+/**
+ * Spread `count` queued contacts (already sorted by send_order) over the projected days' invite totals.
+ * Returns one projected IST date per contact, or "" once the projection runs out.
+ */
+export function assignInviteDates(days: { date: string; invites: number }[], count: number): string[] {
+  const out: string[] = [];
+  for (const day of days) {
+    for (let i = 0; i < day.invites && out.length < count; i++) out.push(day.date);
+    if (out.length >= count) break;
+  }
+  while (out.length < count) out.push("");
+  return out;
+}
