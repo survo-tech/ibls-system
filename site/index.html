@@ -6,165 +6,229 @@
     <title>India Business Leaders Survey</title>
     <meta name="description" content="An academic study by researchers at London Business School, MIT and Harvard University on how Indian businesses are governed, managed and grow. Ethics ref. REC1101." />
     <meta name="robots" content="index,follow" />
+    <meta name="color-scheme" content="light dark" />
     <meta property="og:title" content="India Business Leaders Survey" />
     <meta property="og:description" content="Academic research study by London Business School, MIT and Harvard University (REC1101)." />
     <meta property="og:image" content="https://survo.tech/hero.webp" />
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      rel="stylesheet"
-      href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400&display=swap"
-    />
+    <script src="/theme.js"></script>
     <link rel="stylesheet" href="/site.css" />
-    <style>
-      .x-faq { border-top: 1px solid var(--stroke-secondary); }
-      .x-faq details { border-bottom: 1px solid var(--stroke-secondary); }
-      .x-faq summary {
-        display: flex; justify-content: space-between; align-items: center; gap: 16px;
-        min-height: var(--tap); padding: 14px 0; font: var(--type-body); font-weight: var(--weight-medium);
-        color: var(--text-primary); cursor: pointer; list-style: none;
-      }
-      .x-faq summary::-webkit-details-marker { display: none; }
-      .x-faq summary::after { content: "+"; font: var(--type-heading); color: var(--text-secondary); transition: transform var(--dur-quick) var(--ease-out); }
-      .x-faq details[open] summary::after { transform: rotate(45deg); }
-      .x-faq details p { padding: 0 0 18px; font: var(--type-body); color: var(--text-secondary); max-width: 68ch; }
-      .x-verify { padding: 28px; border: 1px solid var(--stroke-primary); border-radius: var(--r-l); display: grid; gap: 20px; }
-    </style>
+    <script src="/site.js" defer></script>
   </head>
   <body>
+    <a class="skip" href="#main">Skip to content</a>
+    <div class="progress" aria-hidden="true"><span id="progress"></span></div>
     <div class="page" id="top">
-      <header class="nav glass" data-auto></header>
-      <main class="main">
-        <section class="hero">
-          <img class="hero__img" src="/hero.webp" width="1584" height="672" fetchpriority="high" alt="A boardroom at dusk" />
+      <header class="nav">
+        <a class="brand" href="#top" aria-label="India Business Leaders Survey, top of page"><span class="brand__mark" aria-hidden="true">IB</span><span class="brand__name">India Business Leaders Survey</span></a>
+        <nav class="seg" aria-label="Sections">
+          <a href="#verify">Verify</a>
+          <a href="#about">About</a>
+          <a href="#team">Researchers</a>
+          <a href="#expect">What to expect</a>
+          <a href="#privacy">Your rights</a>
+          <a href="#faq">FAQ</a>
+          <a href="#contact">Contact</a>
+        </nav>
+        <button class="theme-btn" id="theme-btn" type="button" aria-label="Switch to dark theme" hidden></button>
+      </header>
+
+      <main class="main" id="main">
+        <section class="hero" aria-labelledby="h1">
           <div class="hero__copy">
-            <p class="hero__eyebrow">Academic research study</p>
-            <h1>India Business Leaders Survey</h1>
+            <p class="eyebrow">Academic research study</p>
+            <h1 id="h1">India Business Leaders <span class="hl">Survey</span></h1>
             <p class="hero__sub">An academic study by researchers at London Business School, MIT and Harvard University on how Indian businesses are governed, managed and grow.</p>
-            <p class="hero__meta">About 15–20 minutes · Fully confidential · Ethics clearance REC1101 (London Business School) · Free customised peer benchmark report for participants</p>
-          </div>
-          <aside class="callout" aria-label="Take part">
-            <p class="callout__head">For invited participants</p>
-            <p class="callout__lead"><strong>You can check this study is genuine before you begin.</strong></p>
             <div class="links">
+              <a class="btn btn--solid" href="#verify">Check this invitation is genuine</a>
               <a class="btn" href="https://ee.kobotoolbox.org/jbh8Urj6" target="_blank" rel="noopener">Start the survey</a>
-              <a class="btn" href="#verify">Verify this study</a>
             </div>
-          </aside>
+            <p class="hero__meta">About 15–20 minutes · Confidential · Ethics clearance REC1101 (London Business School) · Free customised peer benchmark report for participants</p>
+          </div>
+
+          <figure class="hero__art" id="art">
+            <svg viewBox="0 0 600 560" role="img" aria-labelledby="art-t art-d" focusable="false">
+              <title id="art-t">The study at a glance</title>
+              <desc id="art-d">A diagram. At the centre is ethics clearance REC1101. Around it are three institutions, London Business School, MIT and Harvard University, joined to four investigators. An outer ring marks the five survey sections.</desc>
+              <g class="layer layer--ring">
+                <circle class="ring" cx="300" cy="280" r="248" />
+                <circle class="ring ring--spin" cx="300" cy="280" r="214" />
+                <g class="secs">
+                  <g transform="translate(300 32)"><circle r="17" /><text y="6">1</text></g>
+                  <g transform="translate(535.8 203.3)"><circle r="17" /><text y="6">2</text></g>
+                  <g transform="translate(445.7 480.7)"><circle r="17" /><text y="6">3</text></g>
+                  <g transform="translate(154.3 480.7)"><circle r="17" /><text y="6">4</text></g>
+                  <g transform="translate(64.2 203.3)"><circle r="17" /><text y="6">5</text></g>
+                </g>
+              </g>
+              <g class="layer layer--core">
+                <g class="edges">
+                  <line x1="300" y1="280" x2="300" y2="128" />
+                  <line x1="300" y1="280" x2="438" y2="360" />
+                  <line x1="300" y1="280" x2="162" y2="360" />
+                  <line x1="300" y1="128" x2="236" y2="82" />
+                  <line x1="438" y1="360" x2="494" y2="318" />
+                  <line x1="438" y1="360" x2="478" y2="424" />
+                  <line x1="162" y1="360" x2="110" y2="418" />
+                </g>
+                <g class="people">
+                  <circle cx="236" cy="82" r="9" /><circle cx="494" cy="318" r="9" /><circle cx="478" cy="424" r="9" /><circle cx="110" cy="418" r="9" />
+                </g>
+                <g class="inst">
+                  <g transform="translate(300 128)"><circle r="30" /><text y="6">LBS</text></g>
+                  <g transform="translate(438 360)"><circle r="30" /><text y="6">MIT</text></g>
+                  <g transform="translate(162 360)"><circle r="38" /><text y="6">Harvard</text></g>
+                </g>
+                <g class="hub" transform="translate(300 280)">
+                  <circle class="hub__pulse" r="46" />
+                  <circle class="hub__dot" r="46" />
+                  <text y="6">REC1101</text>
+                </g>
+              </g>
+            </svg>
+            <figcaption>One ethics clearance, three universities, four investigators and five survey sections.</figcaption>
+          </figure>
         </section>
 
-        <section class="section" id="about" data-nav="About">
-          <div class="head">
-            <p class="head__eyebrow">About the study</p>
-            <h2>How governance and management shape long-term firm development.</h2>
+        <section class="facts rv" aria-label="The study in four numbers">
+          <dl>
+            <div><dt>Investigators</dt><dd><span data-count="4">4</span></dd></div>
+            <div><dt>Universities</dt><dd><span data-count="3">3</span></dd></div>
+            <div><dt>Survey sections</dt><dd><span data-count="5">5</span></dd></div>
+            <div><dt>Ethics clearance</dt><dd>REC1101</dd></div>
+          </dl>
+        </section>
+
+        <section class="section" id="verify" data-nav aria-labelledby="verify-h">
+          <div class="head rv">
+            <p class="eyebrow">Is this email genuine?</p>
+            <h2 id="verify-h">We know unexpected emails deserve caution. Check four things.</h2>
+            <p class="head__sub">Tick each one as you confirm it. Nothing is saved or sent anywhere.</p>
           </div>
-          <div class="prose">
+          <div class="check rv">
+            <fieldset>
+              <legend class="sr">Four checks for an invitation to this study</legend>
+              <label class="check__item">
+                <input type="checkbox" />
+                <span class="check__box" aria-hidden="true"></span>
+                <span class="check__text"><strong class="check__title">The sender address ends in @survo.tech.</strong> Genuine invitations come only from addresses ending in <b>@survo.tech</b>. Look at the full address, not just the display name.</span>
+              </label>
+              <label class="check__item">
+                <input type="checkbox" />
+                <span class="check__box" aria-hidden="true"></span>
+                <span class="check__text"><strong class="check__title">The ethics reference is REC1101.</strong> The study was reviewed and cleared by the London Business School Research Ethics Committee, REC No. REC1101. You can ask <a class="link" href="mailto:ethics@london.edu">ethics@london.edu</a>, quoting the researcher name, study title and REC number.</span>
+              </label>
+              <label class="check__item">
+                <input type="checkbox" />
+                <span class="check__box" aria-hidden="true"></span>
+                <span class="check__text"><strong class="check__title">The survey form is on KoboToolbox.</strong> The survey runs on KoboToolbox (ee.kobotoolbox.org), a secure research data platform.</span>
+              </label>
+              <label class="check__item">
+                <input type="checkbox" />
+                <span class="check__box" aria-hidden="true"></span>
+                <span class="check__text"><strong class="check__title">Nothing asks for passwords, bank details or payments.</strong> We will never ask for any of these.</span>
+              </label>
+            </fieldset>
+            <div class="check__result">
+              <p class="check__hint">If any check does not match, do not click anything. Write to <a class="link" href="mailto:participate@survo.tech">participate@survo.tech</a> or to an investigator listed below.</p>
+              <p class="check__ok"><b>All four checks done.</b> If each one matched, the invitation is consistent with this study. If anything looked different, write to <a class="link" href="mailto:participate@survo.tech">participate@survo.tech</a> before you proceed.</p>
+            </div>
+          </div>
+        </section>
+
+        <section class="section" id="about" data-nav aria-labelledby="about-h">
+          <div class="head rv">
+            <p class="eyebrow">About the study</p>
+            <h2 id="about-h">How governance and management shape long-term firm development.</h2>
+          </div>
+          <div class="prose rv">
             <p>The survey asks businesses about their governance structure, management practices, aims and aspirations, and social embeddedness. It compares practices across promoter-led and professionally run enterprises to identify what structures best support long-term firm development.</p>
             <p>Findings will help academics and policymakers design evidence-based policies and governance frameworks suited to Indian firms, and help business leaders examine their own practices against the broader corporate environment.</p>
           </div>
-          <p class="fineprint">Throughout the survey, “promoter” refers to the founder(s) or controlling owner(s) of the business and, where applicable, their family.</p>
+          <p class="fineprint rv">Throughout the survey, “promoter” refers to the founder(s) or controlling owner(s) of the business and, where applicable, their family.</p>
         </section>
 
-        <section class="section" id="team" data-nav="Researchers">
-          <div class="head">
-            <p class="head__eyebrow">Who is running it</p>
-            <h2>Four investigators from three universities.</h2>
+        <section class="section" id="team" data-nav aria-labelledby="team-h">
+          <div class="head rv">
+            <p class="eyebrow">Who is running it</p>
+            <h2 id="team-h">Four investigators from three universities.</h2>
+            <p class="head__sub">Each one can be reached at an institutional address, so you can confirm the study with them directly.</p>
           </div>
-          <div class="cards">
-            <div>
+          <ul class="people-list">
+            <li class="person rv">
+              <span class="person__mono" aria-hidden="true">SP</span>
               <h3>Sukrit Singh Puri</h3>
               <p>London Business School</p>
-              <ul><li><a class="link" href="mailto:sukritp@london.edu">sukritp@london.edu</a></li></ul>
-            </div>
-            <div>
+              <a class="link" href="mailto:sukritp@london.edu">sukritp@london.edu</a>
+            </li>
+            <li class="person rv">
+              <span class="person__mono" aria-hidden="true">VN</span>
               <h3>Vishan Nigam</h3>
               <p>Massachusetts Institute of Technology (MIT)</p>
-              <ul><li><a class="link" href="mailto:vishan@mit.edu">vishan@mit.edu</a></li></ul>
-            </div>
-            <div>
+              <a class="link" href="mailto:vishan@mit.edu">vishan@mit.edu</a>
+            </li>
+            <li class="person rv">
+              <span class="person__mono" aria-hidden="true">AN</span>
               <h3>Aroon Narayanan</h3>
               <p>Massachusetts Institute of Technology (MIT)</p>
-              <ul><li><a class="link" href="mailto:aroon@mit.edu">aroon@mit.edu</a></li></ul>
-            </div>
-            <div>
+              <a class="link" href="mailto:aroon@mit.edu">aroon@mit.edu</a>
+            </li>
+            <li class="person rv">
+              <span class="person__mono" aria-hidden="true">SV</span>
               <h3>Shivram Viswanathan</h3>
               <p>Harvard University</p>
-              <ul><li><a class="link" href="mailto:sviswanathan@fas.harvard.edu">sviswanathan@fas.harvard.edu</a></li></ul>
-            </div>
-          </div>
-          <div class="aside">
-            <h3>Fieldwork partner</h3>
-            <p class="fineprint">Morsel Research and Development Pvt Ltd coordinates invitations and participant support in India.</p>
-          </div>
+              <a class="link" href="mailto:sviswanathan@fas.harvard.edu">sviswanathan@fas.harvard.edu</a>
+            </li>
+          </ul>
+          <p class="fineprint rv"><b>Fieldwork partner:</b> Morsel Research and Development Pvt Ltd coordinates invitations and participant support in India.</p>
         </section>
 
-        <section class="section" id="expect" data-nav="What to expect">
-          <div class="head">
-            <p class="head__eyebrow">What to expect</p>
-            <h2>Consent first, then five short sections.</h2>
-            <p class="head__sub">
-              <span class="pill">15–20 minutes</span> <span class="pill">One sitting</span> <span class="pill">Desktop or mobile</span>
-            </p>
+        <section class="section" id="expect" data-nav aria-labelledby="expect-h">
+          <div class="head rv">
+            <p class="eyebrow">What to expect</p>
+            <h2 id="expect-h">Consent first, then five short sections.</h2>
+            <p class="head__sub"><span class="pill">15–20 minutes</span> <span class="pill">One sitting</span> <span class="pill">Desktop or mobile</span></p>
           </div>
-          <div class="steps">
-            <article class="step">
-              <div class="step__intro"><p class="step__num">—</p><p class="step__eyebrow">Before you begin</p></div>
-              <div>
-                <h3>Participant information and consent</h3>
-                <p>Read the participant information and give your consent. You must be 18 or older.</p>
-              </div>
-            </article>
-            <article class="step">
-              <div class="step__intro"><p class="step__num">00</p><p class="step__eyebrow">Section 0</p></div>
-              <div><h3>About you</h3><p>Your role, years at the company, education.</p></div>
-            </article>
-            <article class="step">
-              <div class="step__intro"><p class="step__num">01</p><p class="step__eyebrow">Section 1</p></div>
-              <div><h3>Governance</h3><p>Ownership, the board, and who makes key decisions.</p></div>
-            </article>
-            <article class="step">
-              <div class="step__intro"><p class="step__num">02</p><p class="step__eyebrow">Section 2</p></div>
-              <div><h3>Management</h3><p>Management practices in your firm.</p></div>
-            </article>
-            <article class="step">
-              <div class="step__intro"><p class="step__num">03</p><p class="step__eyebrow">Section 3</p></div>
-              <div><h3>Firm outcomes</h3><p>Purpose and aspiration, performance, growth plans and financing.</p></div>
-            </article>
-            <article class="step">
-              <div class="step__intro"><p class="step__num">04</p><p class="step__eyebrow">Section 4</p></div>
-              <div><h3>Social</h3><p>The firm’s ties to its community and networks.</p></div>
-            </article>
+          <div class="tl" id="tl">
+            <div class="tl__start rv">
+              <h3>Before you begin: participant information and consent</h3>
+              <p>Read the participant information and give your consent. You must be 18 or older.</p>
+            </div>
+            <ol class="tl__list">
+              <li class="rv"><div><h3>About you</h3><p>Your role, years at the company, education.</p></div></li>
+              <li class="rv"><div><h3>Governance</h3><p>Ownership, the board, and who makes key decisions.</p></div></li>
+              <li class="rv"><div><h3>Management</h3><p>Management practices in your firm.</p></div></li>
+              <li class="rv"><div><h3>Firm outcomes</h3><p>Purpose and aspiration, performance, growth plans and financing.</p></div></li>
+              <li class="rv"><div><h3>Social</h3><p>The firm’s ties to its community and networks.</p></div></li>
+            </ol>
           </div>
-          <div class="cards">
-            <div>
+          <div class="duo">
+            <div class="panel rv">
               <h3>Practical notes</h3>
               <ul>
-                <li>Takes about 15–20 minutes</li>
                 <li>Please complete it in one sitting</li>
                 <li>Please take it only once</li>
-                <li>Works on desktop and mobile</li>
                 <li>You can skip any question you prefer not to answer</li>
               </ul>
             </div>
-            <div>
+            <div class="panel panel--accent rv">
               <h3>What you receive</h3>
-              <p class="quote">A confidential, customised Executive Peer Benchmark Report.</p>
+              <p class="panel__lead">A confidential, customised Executive Peer Benchmark Report.</p>
               <p>It compares your firm’s governance and operational practices with peer enterprises in your sector and size band across India, and is shared after the study concludes.</p>
             </div>
           </div>
-          <div class="links">
-            <a class="btn" href="https://ee.kobotoolbox.org/jbh8Urj6" target="_blank" rel="noopener">Start the survey</a>
+          <div class="links rv">
+            <a class="btn btn--solid" href="https://ee.kobotoolbox.org/jbh8Urj6" target="_blank" rel="noopener">Start the survey</a>
           </div>
         </section>
 
-        <section class="section" id="privacy" data-nav="Your rights">
-          <div class="head">
-            <p class="head__eyebrow">Confidentiality and your rights</p>
-            <h2>Your responses are confidential and no firm is ever identified.</h2>
+        <section class="section" id="privacy" data-nav aria-labelledby="privacy-h">
+          <div class="head rv">
+            <p class="eyebrow">Confidentiality and your rights</p>
+            <h2 id="privacy-h">Your responses are confidential and no firm is ever identified.</h2>
           </div>
-          <div class="cards">
-            <div>
+          <div class="trio">
+            <div class="panel rv">
               <h3>How data is handled</h3>
               <ul>
                 <li>Confidential and treated anonymously under GDPR, the UK Data Protection Act 2018 and the London Business School Research Lab privacy statement</li>
@@ -172,7 +236,7 @@
                 <li>Anonymised data may be deposited in a research data archive for future academic use under open-science practices</li>
               </ul>
             </div>
-            <div>
+            <div class="panel rv">
               <h3>Your choices</h3>
               <ul>
                 <li>Participation is voluntary</li>
@@ -181,7 +245,7 @@
                 <li>No risks beyond those of daily life</li>
               </ul>
             </div>
-            <div>
+            <div class="panel rv">
               <h3>How results are used</h3>
               <ul>
                 <li>For academic purposes only</li>
@@ -193,85 +257,51 @@
           </div>
         </section>
 
-        <section class="section" id="verify" data-nav="Verify">
-          <div class="head">
-            <p class="head__eyebrow">Verify this study</p>
-            <h2>We know unexpected emails deserve caution.</h2>
-            <p class="head__sub">You can confirm this study independently.</p>
+        <section class="section" id="faq" data-nav aria-labelledby="faq-h">
+          <div class="head rv">
+            <p class="eyebrow">FAQ</p>
+            <h2 id="faq-h">Common questions.</h2>
           </div>
-          <div class="x-verify">
-            <aside class="callout" aria-label="Ethics clearance">
-              <p class="callout__head"><span class="chip chip--solid">REC1101</span></p>
-              <p class="callout__lead"><strong>Reviewed and cleared by the London Business School Research Ethics Committee, REC No. REC1101.</strong> For any ethical concern, write to <a class="link" href="mailto:ethics@london.edu">ethics@london.edu</a> quoting the researcher name, study title and REC number.</p>
-            </aside>
-            <div class="cards">
-              <div>
-                <h3>Genuine invitations</h3>
-                <ul>
-                  <li>Come only from addresses ending in <b>@survo.tech</b></li>
-                  <li>The survey runs on KoboToolbox (ee.kobotoolbox.org), a secure research data platform</li>
-                  <li>We will never ask for passwords, bank details or payments</li>
-                </ul>
-              </div>
-              <div>
-                <h3>Technical difficulty</h3>
-                <p>Contact Jaideep Rao, London Business School.</p>
-                <ul><li><a class="link" href="mailto:jrao@london.edu">jrao@london.edu</a></li></ul>
-              </div>
-              <div>
-                <h3>Fieldwork contact</h3>
-                <p>Bishnu Datta Behuria, Morsel Research and Development.</p>
-                <ul><li><a class="link" href="mailto:bishnu@morselindia.org">bishnu@morselindia.org</a></li></ul>
-              </div>
-              <div>
-                <h3>Investigators</h3>
-                <p>Each investigator’s institutional email is listed under <a class="link" href="#team">Who is running it</a>.</p>
-              </div>
-            </div>
-          </div>
-        </section>
-
-        <section class="section" id="faq" data-nav="FAQ">
-          <div class="head">
-            <p class="head__eyebrow">FAQ</p>
-            <h2>Common questions.</h2>
-          </div>
-          <div class="x-faq">
+          <div class="faq rv">
             <details><summary>Why was my company invited?</summary><p>Your company is part of a research sample of Indian companies drawn from public corporate registry information across regions, sectors and size bands.</p></details>
-            <details><summary>Who should answer?</summary><p>The promoter, a director or a senior executive who knows the company’s governance and management.</p></details>
-            <details><summary>Is my information confidential?</summary><p>Yes. Responses are analysed anonymously and no firm is named in any publication.</p></details>
-            <details><summary>How long does it take?</summary><p>About 15–20 minutes, in one sitting.</p></details>
-            <details><summary>Can someone else at my company complete it?</summary><p>Yes, a senior colleague with good knowledge of the business can complete it on the company’s behalf. Please submit only one response per company.</p></details>
+            <details><summary>Who should answer?</summary><p>The promoter, a director or a senior executive who knows the company’s governance and management. A senior colleague with good knowledge of the business can complete it on the company’s behalf. Please submit only one response per company.</p></details>
+            <details><summary>Is my information confidential?</summary><p>Yes. Responses are confidential, identifying details are kept separate from your answers, and no firm is named in any publication.</p></details>
             <details><summary>When will I receive the benchmark report?</summary><p>After the study closes and the analysis is complete.</p></details>
             <details><summary>I don’t want further emails.</summary><p>Reply “OPT OUT” to the invitation, use the opt-out link at the bottom of the email, or write to <a class="link" href="mailto:participate@survo.tech">participate@survo.tech</a>, and we will remove you promptly.</p></details>
           </div>
         </section>
 
-        <section class="section" id="contact" data-nav="Contact">
-          <div class="head">
-            <h2>Ready to take part?</h2>
+        <section class="section section--end" id="contact" data-nav aria-labelledby="contact-h">
+          <div class="head rv">
+            <p class="eyebrow">Contact</p>
+            <h2 id="contact-h">Ready to take part?</h2>
             <p class="head__sub">The survey opens in a new tab on KoboToolbox.</p>
           </div>
-          <div class="links">
-            <a class="btn" href="https://ee.kobotoolbox.org/jbh8Urj6" target="_blank" rel="noopener">Start the survey</a>
-            <a class="btn" href="#verify">Verify this study</a>
+          <div class="links rv">
+            <a class="btn btn--solid" href="https://ee.kobotoolbox.org/jbh8Urj6" target="_blank" rel="noopener">Start the survey</a>
+            <a class="btn" href="#verify">Check this invitation first</a>
           </div>
-          <div class="breakdown">
-            <dl>
-              <div class="row"><dt>Participant support</dt><dd><a class="link" href="mailto:participate@survo.tech">participate@survo.tech</a></dd></div>
-              <div class="row"><dt>Fieldwork contact</dt><dd>Bishnu Datta Behuria, Morsel Research and Development · <a class="link" href="mailto:bishnu@morselindia.org">bishnu@morselindia.org</a></dd></div>
-              <div class="row"><dt>Ethics concerns</dt><dd><a class="link" href="mailto:ethics@london.edu">ethics@london.edu</a></dd></div>
-              <div class="row"><dt>Technical help with the survey</dt><dd><a class="link" href="mailto:jrao@london.edu">jrao@london.edu</a></dd></div>
-            </dl>
-          </div>
+          <dl class="contacts rv">
+            <div><dt>Participant support</dt><dd><a class="link" href="mailto:participate@survo.tech">participate@survo.tech</a></dd></div>
+            <div><dt>Fieldwork contact</dt><dd>Bishnu Datta Behuria, Morsel Research and Development<br /><a class="link" href="mailto:bishnu@morselindia.org">bishnu@morselindia.org</a></dd></div>
+            <div><dt>Ethics concerns</dt><dd><a class="link" href="mailto:ethics@london.edu">ethics@london.edu</a></dd></div>
+            <div><dt>Technical help with the survey</dt><dd>Jaideep Rao, London Business School<br /><a class="link" href="mailto:jrao@london.edu">jrao@london.edu</a></dd></div>
+          </dl>
         </section>
       </main>
       <footer class="foot">
         <p>India Business Leaders Survey · London Business School · MIT · Harvard University · Fieldwork: Morsel Research and Development Pvt Ltd · REC1101</p>
-        <p>Fieldwork contact: Bishnu Datta Behuria, Morsel Research and Development · <a class="link" href="mailto:bishnu@morselindia.org">bishnu@morselindia.org</a></p>
-        <nav aria-label="Back to sections" data-auto></nav>
+        <nav aria-label="Back to sections">
+          <a href="#top">Top</a>
+          <a href="#verify">Verify</a>
+          <a href="#about">About</a>
+          <a href="#team">Researchers</a>
+          <a href="#expect">What to expect</a>
+          <a href="#privacy">Your rights</a>
+          <a href="#faq">FAQ</a>
+          <a href="#contact">Contact</a>
+        </nav>
       </footer>
     </div>
-    <script src="/site.js" defer></script>
   </body>
 </html>

@@ -61,10 +61,8 @@ export function page(title: string, inner: string): string {
 <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 <meta name="robots" content="noindex" />
 <title>${escapeHtml(title)} · India Business Leaders Survey</title>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&display=swap" />
 <link rel="stylesheet" href="/site.css" />
 <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
-<style>.x-wrap{max-width:720px;margin:0 auto;padding:12vh 24px 48px} button.btn{cursor:pointer;font:inherit}</style>
 </head><body><div class="page"><main class="main"><section class="section x-wrap">
 <div class="head"><p class="head__eyebrow">India Business Leaders Survey</p><h2>${escapeHtml(title)}</h2></div>
 ${inner}
