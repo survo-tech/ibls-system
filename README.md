@@ -31,7 +31,7 @@ This repo sends the invitations and reminders for the **India Business Leaders S
                          └──────────────▲───────────────────────────▲────────────────────────▲──────────────┘
                                         │ HTTPS + Bearer             │                        │
   GitHub Actions (Python 3.12) ─────────┴───────────────────────────┴────────────────────────┘
-   send.yml          every 10 min, 04:30–11:30 UTC Mon–Fri: 5 mailboxes in parallel, each: next-batch ─▶
+   send.yml          every 10 min, 06:00–22:00 IST every day: 5 mailboxes in parallel, each: next-batch ─▶
                      Gmail API users.messages.send as that mailbox (20–60 s jitter) ─▶ events;
                      stops a mailbox on daily-quota / rate-limit / auth errors
    sync.yml          every 30 min: Gmail API history (or query) per mailbox: DSN bounces, ARF complaints,
@@ -136,8 +136,8 @@ The five mailboxes are ordinary Workspace users. The jobs never use their passwo
     * Replying "OPT OUT" or a question shows up on the dashboard after the next **sync** run.
     * Submitting the form marks the contact completed after sync.
 
-    A weekday with clean seed sends moves each mailbox to **stage 1 (20/day)** from the next day. Run `make seed-test` again to reset the test contacts.
-14. **Go live** before 27 Oct 2026, 10:00 IST: on the dashboard, set `postal_address` if you want one in the footer, check the warm-up table (every mailbox should show stage 1 after its seed day; otherwise use **Set stage**), then set **test_mode = false**. Nothing goes out before `start_date`, outside 10:00–17:00 IST Mon–Fri, or on blackout dates (Diwali 5–11 Nov 2026).
+    A weekday with clean seed sends moves each mailbox to **stage 1** from the next day. With the current caps that is 250/day. Run `make seed-test` again to reset the test contacts.
+14. **Go live** before 27 Oct 2026, 10:00 IST: on the dashboard, set `postal_address` if you want one in the footer, check the warm-up table (every mailbox should show stage 1 after its seed day; otherwise use **Set stage**), then set **test_mode = false**. Nothing goes out before `start_date`, outside 06:00–22:00 IST Mon–Fri, or on blackout dates (Diwali 5–11 Nov 2026).
 
 ### GitHub Actions minutes
 
@@ -152,7 +152,7 @@ Each mailbox warms up separately (settings `warmup_*`):
 | Stage | Daily cap per mailbox |
 |---|---|
 | 0 | seed-test day: only seeded test contacts (`warmup_seed_cap`, default 5) |
-| 1 → 7 | 20, 40, 60, 100, 150, 200, 250 (`warmup_caps`) |
+| 1 → 7 | 250 at every stage (`warmup_caps`). The ladder used to be 20, 40, 60, 100, 150, 200, 250; from 13 Nov 2026 every mailbox is held at 250/day so the remaining invites finish sooner. |
 
 Once per IST day the Worker looks at the mailbox's most recent **weekday on which it actually sent** that has not been judged yet, and its hard-bounce rate over its **last 3 send days** (`warmup_window_days`):
 
@@ -160,7 +160,7 @@ Once per IST day the Worker looks at the mailbox's most recent **weekday on whic
 * 2 % or more → **hold**;
 * **4 %** or more (`warmup_stepback_bounce_rate`) or **any complaint** → **step back** one stage (never below 1).
 
-Days without sends (weekends, blackout, a pause, a mailbox with nothing due) never advance a mailbox. With all five mailboxes clean, total daily capacity goes 100, 200, 300, 500, 750, 1,000, 1,250. The dashboard shows each mailbox's stage, cap, sent today and the last decision with its reason, and **Set stage** lets a researcher hold, step back, or skip the seed day (logged as an admin event).
+Days without sends (weekends, blackout, a pause, a mailbox with nothing due) never advance a mailbox. With the flat 250 cap, five mailboxes can send 1,250 messages a day. The dashboard shows each mailbox's stage, cap, sent today and the last decision with its reason, and **Set stage** lets a researcher hold, step back, or skip the seed day (logged as an admin event). Editing `warmup_caps` still changes the per-stage limits; nothing can exceed 450/day.
 
 ## Cloudflare Access (primary dashboard protection)
 
@@ -184,10 +184,10 @@ All of these are settings you can edit on the dashboard:
 | Setting | Default | Meaning |
 |---|---|---|
 | `start_date` / `end_date` | 2026-10-27 / (none) | No sends before `start_date` or after `end_date` (IST dates) |
-| `window_start` / `window_end` | 10:00 / 17:00 | IST send window |
+| `window_start` / `window_end` | 06:00 / 22:00 | IST send window (same hours the send workflow runs) |
 | `send_weekdays` | 1,2,3,4,5 | Mon–Fri |
 | `blackout_dates` | 2026-11-05..2026-11-11 | Diwali. Accepts a comma list of dates or `a..b` ranges. |
-| `warmup_caps` / `warmup_seed_cap` | 20,40,60,100,150,200,250 / 5 | Per-mailbox daily cap at warm-up stage 1…7 / seed messages on the stage-0 day (see warm-up above) |
+| `warmup_caps` / `warmup_seed_cap` | 250,250,250,250,250,250,250 / 5 | Per-mailbox daily cap at warm-up stage 1…7 / seed messages on the stage-0 day (see warm-up above) |
 | `warmup_max_bounce_rate` / `warmup_stepback_bounce_rate` / `warmup_window_days` | 0.02 / 0.04 / 3 | Advance below 2 %, step back at 4 % or any complaint, judged over the mailbox's last 3 send days |
 | `cap_max` | 450 | Ceiling over the warm-up caps; the code never allows more than 450/day/mailbox |
 | `hourly_cap` | 120 | Per mailbox, over a rolling 60 minutes |
