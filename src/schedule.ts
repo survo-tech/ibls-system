@@ -135,7 +135,7 @@ export function rampCap(k: number, ramp: number[], capMax: number): number {
 // ---------------------------------------------------------------------------------------------
 // Per-mailbox warm-up
 //   stage 0  = seed-test day: the mailbox may only send to the seeded test contacts (test_recipients)
-//   stage k  = warmup_caps[k-1] per day (default 20,40,60,100,150,200,250)
+//   stage k  = warmup_caps[k-1] per day (campaign setting: 250 at every stage)
 // The stage is re-evaluated once per IST day from the mailbox's last weekday with sends.
 // ---------------------------------------------------------------------------------------------
 
@@ -150,7 +150,7 @@ export interface WarmupConfig {
 
 export function warmupConfigFromSettings(s: Record<string, string>): WarmupConfig {
   return {
-    caps: parseRamp(s.warmup_caps || "20,40,60,100,150,200,250").map((n) => Math.min(n, DAILY_HARD_MAX)),
+    caps: parseRamp(s.warmup_caps || "250,250,250,250,250,250,250").map((n) => Math.min(n, DAILY_HARD_MAX)),
     seedCap: Math.max(0, Math.min(num(s.warmup_seed_cap, 5), 50)),
     maxBounceRate: num(s.warmup_max_bounce_rate, 0.02),
     stepbackBounceRate: num(s.warmup_stepback_bounce_rate, 0.04),
@@ -327,11 +327,11 @@ export function configFromSettings(s: Record<string, string>): ScheduleConfig {
   return {
     startDate: s.start_date || "",
     endDate: s.end_date || "",
-    windowStart: parseHHMM(s.window_start, 600),
-    windowEnd: parseHHMM(s.window_end, 1020),
+    windowStart: parseHHMM(s.window_start, 360),
+    windowEnd: parseHHMM(s.window_end, 1320),
     weekdays: String(s.send_weekdays || "1,2,3,4,5").split(/[\s,]+/).map(Number).filter((n) => n >= 1 && n <= 7),
     blackout: parseBlackout(s.blackout_dates || ""),
-    warmupCaps: parseRamp(s.warmup_caps || "20,40,60,100,150,200,250"),
+    warmupCaps: parseRamp(s.warmup_caps || "250,250,250,250,250,250,250"),
     capMax: Math.min(num(s.cap_max, DAILY_HARD_MAX), DAILY_HARD_MAX),
     hourlyCap: num(s.hourly_cap, 120),
     reminderAfterWorkdays: num(s.reminder_after_workdays, 5),

@@ -47,6 +47,9 @@ test("auth is enforced", async () => {
 test("defaults: test mode on, contacts imported", async () => {
   const s = await api("/api/settings");
   assert.equal(s.body.settings.test_mode, "true");
+  assert.equal(s.body.settings.window_start, "06:00");
+  assert.equal(s.body.settings.window_end, "22:00");
+  assert.equal(s.body.settings.warmup_caps, "250,250,250,250,250,250,250");
   const sum = await dash("summary");
   assert.equal(sum.status, 200);
   assert.equal(sum.body.kpis.contacts, 8092);
@@ -97,7 +100,10 @@ test("test mode only ever returns allow-listed test contacts; reservation is ide
 test("live mode: window, start date, ramp pacing, blackout", async () => {
   const bad = await dash("settings", { method: "POST", body: JSON.stringify({ window_start: "25:00" }) });
   assert.equal(bad.status, 400);
-  const ok = await dash("settings", { method: "POST", body: JSON.stringify({ test_mode: "false" }) });
+  // This case checks the ramp and the 10:00–17:00 pacing math. The campaign itself sends 250/day from 06:00–22:00.
+  const ok = await dash("settings", { method: "POST", body: JSON.stringify({
+    test_mode: "false", window_start: "10:00", window_end: "17:00", warmup_caps: "20,40,60,100,150,200,250",
+  }) });
   assert.equal(ok.status, 200);
 
   const before = await batch(P, "2026-10-26T06:00:00Z", "l0");
@@ -310,6 +316,8 @@ function parseCsv(text) {
 }
 
 test("per-mailbox warm-up: seed stage, advance, hold, step back; caps never above 450", async () => {
+  // The ramp under test. Production caps are flat 250; this case restores the ladder so advance/hold/step-back still change the daily cap.
+  assert.equal((await dash("settings", { method: "POST", body: JSON.stringify({ warmup_caps: "20,40,60,100,150,200,250", window_start: "10:00", window_end: "17:00" }) })).status, 200);
   // Settings cannot raise any mailbox above 450/day.
   assert.equal((await dash("settings", { method: "POST", body: JSON.stringify({ warmup_caps: "20,40,500" }) })).status, 400);
   assert.equal((await dash("settings", { method: "POST", body: JSON.stringify({ cap_max: "451" }) })).status, 400);
